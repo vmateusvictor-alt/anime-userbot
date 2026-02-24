@@ -1,14 +1,18 @@
+import os
 import asyncio
 import aiohttp
 import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-# ================= CONFIG =================
+# ================= CONFIG (RAILWAY VARIABLES) =================
 
 api_id = int(os.getenv("API_ID"))
 api_hash = os.getenv("API_HASH")
 session_string = os.getenv("SESSION_STRING")
+
+if not api_id or not api_hash or not session_string:
+    raise ValueError("API_ID, API_HASH ou SESSION_STRING não definidos.")
 
 MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 CHUNK_SIZE = 512 * 1024  # 512KB
@@ -18,7 +22,7 @@ client = TelegramClient(StringSession(session_string), api_id, api_hash)
 download_queue = asyncio.Queue()
 is_processing = False
 
-# ================= DRIVE CONVERTER =================
+# ================= GOOGLE DRIVE CONVERTER =================
 
 def convert_drive_url(url):
     match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
@@ -32,6 +36,7 @@ def convert_drive_url(url):
 async def stream_generator(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url, allow_redirects=True) as response:
+            response.raise_for_status()
             async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                 yield chunk
 
@@ -62,7 +67,10 @@ async def handle_download(event, url):
             percent = int((current / total) * 100)
             if percent % 5 == 0 and percent != last_percent:
                 last_percent = percent
-                await msg.edit(f"📤 Enviando: {percent}%")
+                try:
+                    await msg.edit(f"📤 Enviando: {percent}%")
+                except:
+                    pass
 
         file = await client.upload_file(
             stream_generator(url),
@@ -109,9 +117,11 @@ async def handler(event):
 
 # ================= START =================
 
-async def main():
-    await client.start()
+def main():
+    print("Iniciando Userbot...")
+    client.start()
     print("Userbot rodando...")
-    await client.run_until_disconnected()
+    client.run_until_disconnected()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    main()
