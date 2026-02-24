@@ -6,9 +6,9 @@ from telethon.sessions import StringSession
 
 # ================= CONFIG =================
 
-api_id = 30675606  # SEU API_ID
-api_hash = "24770eab884caef09e377debe19e72d6"
-session_string = "BAHUEpYACGG3lNHvH2O5gnMGMSKk2q2Z8N_7PuZGPIvs92wV_9M5nPfuJqkaSETyysjeXFDFLWYzqOcCokelxpOVDqlHONYBzn8ea5Kt_13xdf9ISmEPwXQe-I8Br-qPkNu8nVkyGok9Gjuvv3jDkPiq8W1jg32BqiUSzV9Rx4Psqx5VvtYFV4HIYQ4rWqXrH3sw3OtZDjoGOzC0bEOjm6RjS1ACCVgrgZKobQUvu_yq4g7F945bxxHNKPOLZq2AuKs-7382_ddtg5Zb1R2nDUMowLCc8mrfqZ2Tq5JKDGcT60oudNN4u38WgZoMF62H7UQkmtUPqioLAjBJyDhyo-ag0ysDngAAAAHXBUbNAA"
+api_id = int(os.getenv("API_ID"))
+api_hash = os.getenv("API_HASH")
+session_string = os.getenv("SESSION_STRING")
 
 MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
 CHUNK_SIZE = 512 * 1024  # 512KB
