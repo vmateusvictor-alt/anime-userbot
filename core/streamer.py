@@ -1,92 +1,57 @@
-import time
 import httpx
-import m3u8
-from config import CHUNK_SIZE
-from utils.formatters import format_size
-from core.cancel import is_active, register
+import tempfile
+import os
+import time
 
-async def stream_video(bot, chat_id, url):
 
-    register(chat_id)
+async def stream_video(bot, chat_id, url, cancel_event):
 
-    status = await bot.send_message(chat_id, "📥 Preparando...")
+    progress_message = await bot.send_message(chat_id, "⏳ Iniciando download...")
 
     async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream("GET", url) as response:
 
-        if url.endswith(".m3u8"):
-            playlist = m3u8.loads((await client.get(url)).text)
-            segments = playlist.segments
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            start_time = time.time()
 
-            total_segments = len(segments)
-            current = 0
-            start = time.time()
+            # cria arquivo temporário (não usa RAM)
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                file_path = tmp.name
 
-            async def generator():
-                nonlocal current
+                async for chunk in response.aiter_bytes(1024 * 64):
 
-                for segment in segments:
+                    if cancel_event.is_set():
+                        await bot.send_message(chat_id, "⛔ Cancelado.")
+                        os.remove(file_path)
+                        return
 
-                    if not is_active(chat_id):
-                        break
+                    tmp.write(chunk)
+                    downloaded += len(chunk)
 
-                    seg_url = segment.uri
-                    if not seg_url.startswith("http"):
-                        seg_url = url.rsplit("/", 1)[0] + "/" + seg_url
+                    # atualiza progresso a cada ~1MB
+                    if downloaded % (1024 * 1024) < 65536:
+                        percent = (downloaded / total * 100) if total else 0
+                        speed = downloaded / (time.time() - start_time + 1)
 
-                    r = await client.get(seg_url)
-                    current += 1
+                        text = (
+                            f"📥 Baixando...\n"
+                            f"{percent:.2f}%\n"
+                            f"{downloaded / 1024 / 1024:.2f} MB\n"
+                            f"Velocidade: {speed / 1024 / 1024:.2f} MB/s"
+                        )
 
-                    percent = (current / total_segments) * 100
-                    elapsed = time.time() - start
-                    speed = current / elapsed if elapsed > 0 else 0
+                        try:
+                            await progress_message.edit_text(text)
+                        except:
+                            pass
 
-                    await status.edit_text(
-                        f"📤 Enviando...\n"
-                        f"{percent:.1f}%\n"
-                        f"🚀 {speed:.2f} segmentos/s"
-                    )
+    await progress_message.edit_text("📤 Enviando para Telegram...")
 
-                    yield r.content
+    await bot.send_video(
+        chat_id,
+        video=open(file_path, "rb"),
+        supports_streaming=True
+    )
 
-            await bot.send_video(chat_id, video=generator())
-
-        else:
-            async with client.stream("GET", url) as response:
-
-                total = int(response.headers.get("Content-Length", 0))
-                downloaded = 0
-                start = time.time()
-                last_update = 0
-
-                async def generator():
-                    nonlocal downloaded, last_update
-
-                    async for chunk in response.aiter_bytes(CHUNK_SIZE):
-
-                        if not is_active(chat_id):
-                            break
-
-                        downloaded += len(chunk)
-                        now = time.time()
-                        elapsed = now - start
-                        speed = downloaded / elapsed if elapsed > 0 else 0
-                        eta = (total - downloaded) / speed if speed > 0 else 0
-                        percent = (downloaded / total) * 100 if total else 0
-
-                        if now - last_update > 2:
-                            filled = int(percent // 5)
-                            bar = "█" * filled + "░" * (20 - filled)
-
-                            await status.edit_text(
-                                f"[{bar}] {percent:.1f}%\n"
-                                f"📦 {format_size(downloaded)} / {format_size(total)}\n"
-                                f"🚀 {format_size(speed)}/s\n"
-                                f"⏳ {int(eta)}s"
-                            )
-                            last_update = now
-
-                        yield chunk
-
-                await bot.send_video(chat_id, video=generator(), supports_streaming=True)
-
-    await status.edit_text("✅ Finalizado!")
+    os.remove(file_path)
