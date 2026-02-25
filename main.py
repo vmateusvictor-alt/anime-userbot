@@ -1,5 +1,6 @@
 import asyncio
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 from config import API_ID, API_HASH, STRING_SESSION
 from commands import register_handlers
 from core.queue import worker
@@ -7,12 +8,15 @@ from core.queue import worker
 
 async def main():
     client = TelegramClient(
-        STRING_SESSION,
+        StringSession(STRING_SESSION),
         API_ID,
         API_HASH
     )
 
-    await client.start()
+    await client.connect()
+
+    if not await client.is_user_authorized():
+        raise Exception("STRING_SESSION inválida!")
 
     print("Userbot online...")
 
