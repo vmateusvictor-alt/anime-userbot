@@ -1,25 +1,27 @@
-from telegram.ext import ApplicationBuilder
-from config import TOKEN
+import asyncio
+from telethon import TelegramClient
+from config import API_ID, API_HASH, STRING_SESSION
 from commands import register_handlers
 from core.queue import worker
-import asyncio
 
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+async def main():
+    client = TelegramClient(
+        STRING_SESSION,
+        API_ID,
+        API_HASH
+    )
 
-    register_handlers(app)
+    await client.start()
 
-    async def start_worker(app):
-        asyncio.create_task(worker())
-        print("WORKER INICIADO")
+    print("Userbot online...")
 
-    app.post_init = start_worker
+    register_handlers(client)
 
-    print("Bot rodando...")
+    asyncio.create_task(worker())
 
-    app.run_polling(drop_pending_updates=True)
+    await client.run_until_disconnected()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
