@@ -17,8 +17,8 @@ def main():
 
     register_handlers(app)
 
-    print("Bot rodando...")
-    app.run_polling()
+    print("Bot rodando em polling...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
