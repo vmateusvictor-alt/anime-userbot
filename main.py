@@ -1,24 +1,21 @@
+import asyncio
 from telegram.ext import ApplicationBuilder
 from config import TOKEN
 from commands import register_handlers
 from core.queue import worker
-import asyncio
 
-async def post_init(application):
-    asyncio.create_task(worker())
 
-def main():
-    app = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .post_init(post_init)
-        .build()
-    )
+async def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
     register_handlers(app)
 
-    print("Bot rodando...")
-    app.run_polling()
+    # inicia worker após app inicializar
+    async with app:
+        asyncio.create_task(worker())
+        print("Bot rodando...")
+        await app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
