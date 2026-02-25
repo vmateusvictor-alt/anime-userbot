@@ -5,18 +5,21 @@ from core.queue import worker
 import asyncio
 
 
-async def main():
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     register_handlers(app)
 
+    async def start_worker(app):
+        asyncio.create_task(worker())
+        print("WORKER INICIADO")
+
+    app.post_init = start_worker
+
     print("Bot rodando...")
 
-    # inicia worker manualmente
-    asyncio.create_task(worker())
-
-    await app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
