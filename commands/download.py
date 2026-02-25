@@ -1,9 +1,12 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import asyncio
+from telegram import Update
 from telegram.ext import ContextTypes
 from core.queue import download_queue
 from core.streamer import stream_video
 from core.extractor import extract_video_url
-from core.cancel import cancel
+
+# Guarda eventos de cancelamento por usuário
+user_cancel_events = {}
 
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -13,27 +16,28 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = context.args[0]
     chat_id = update.effective_chat.id
 
-    await update.message.reply_text("🔍 Extraindo link...")
+    await update.message.reply_text("📥 Adicionado à fila...")
 
-    real_url = await extract_video_url(url)
-
-    if not real_url:
-        return await update.message.reply_text("❌ Não foi possível extrair vídeo.")
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Cancelar", callback_data="cancel")]
-    ])
-
-    await update.message.reply_text("📥 Adicionado à fila...", reply_markup=keyboard)
+    cancel_event = asyncio.Event()
+    user_cancel_events[chat_id] = cancel_event
 
     async def job():
-        await stream_video(context.bot, chat_id, real_url)
+        final_url = await extract_video_url(url)
+
+        if not final_url:
+            await context.bot.send_message(chat_id, "❌ Não foi possível extrair o vídeo.")
+            return
+
+        await stream_video(context.bot, chat_id, final_url, cancel_event)
 
     await download_queue.put(job)
 
 
-async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    cancel(update.effective_chat.id)
-    await query.edit_message_text("❌ Download cancelado.")
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+
+    if chat_id in user_cancel_events:
+        user_cancel_events[chat_id].set()
+        await update.message.reply_text("⛔ Download cancelado.")
+    else:
+        await update.message.reply_text("Nenhum download ativo.")
