@@ -1,37 +1,47 @@
+import os
 import asyncio
 import traceback
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from config import API_ID, API_HASH, STRING_SESSION, BOT_TOKEN
-from commands import register_handlers
 from core.queue import worker
 
 
-async def safe_worker():
+async def safe_worker(user_client):
     try:
-        await worker()
+        await worker(user_client)
     except Exception:
         print("Erro no worker:")
         traceback.print_exc()
 
 
 async def main():
-    # USERBOT
+    print("Verificando variáveis de ambiente...")
+
+    # Força Railway a falhar se não estiver lendo
+    if not API_ID:
+        raise Exception("API_ID não encontrada no Railway!")
+
+    if not API_HASH:
+        raise Exception("API_HASH não encontrada no Railway!")
+
+    if not STRING_SESSION:
+        raise Exception("STRING_SESSION não encontrada no Railway!")
+
+    if not BOT_TOKEN:
+        raise Exception("BOT_TOKEN não encontrada no Railway!")
+
+    print("Todas variáveis carregadas ✅")
+
+    # ===== USERBOT =====
+    print("Iniciando userbot...")
     user_client = TelegramClient(
         StringSession(STRING_SESSION),
         API_ID,
         API_HASH
     )
 
-    # BOT
-    bot_client = TelegramClient(
-        "bot_session",
-        API_ID,
-        API_HASH
-    )
-
-    print("Iniciando userbot...")
     await user_client.start()
 
     if not await user_client.is_user_authorized():
@@ -39,16 +49,20 @@ async def main():
 
     print("Userbot online ✅")
 
+    # ===== BOT =====
     print("Iniciando bot...")
+    bot_client = TelegramClient(
+        "bot_session",
+        API_ID,
+        API_HASH
+    )
+
     await bot_client.start(bot_token=BOT_TOKEN)
 
     print("Bot online ✅")
 
-    # Registra handlers no BOT (interface pública)
-    register_handlers(bot_client)
-
-    # Worker usa o userbot para tarefas pesadas
-    asyncio.create_task(safe_worker())
+    # ===== WORKER =====
+    asyncio.create_task(safe_worker(user_client))
 
     # Mantém ambos vivos
     await asyncio.gather(
