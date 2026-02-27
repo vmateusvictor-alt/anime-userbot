@@ -11,20 +11,17 @@ from downloader import download_mp4, download_m3u8
 from uploader import upload_video
 
 # =====================================================
-# VARIÁVEIS DE AMBIENTE
+# VARIÁVEIS
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
+STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN não configurado!")
-
-# =====================================================
-# CONFIG
-# =====================================================
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -39,12 +36,13 @@ userbot = Client(
     "userbot",
     api_id=API_ID,
     api_hash=API_HASH,
-    session_string=SESSION_STRING
+    session_string=SESSION_STRING,
+    no_updates=True
 )
 
 async def start_userbot(app):
-    await userbot.start()
-
+    if not userbot.is_connected:
+        await userbot.start()
 
 # =====================================================
 # COMANDO /an
@@ -82,7 +80,6 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
     async with download_lock:
-
         try:
 
             # Detecta tipo
@@ -93,30 +90,28 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await msg.edit_text("📤 Enviando para Telegram...")
 
-            # Upload via userbot (retorna file_id)
-            file_id = await upload_video(
+            # Upload para canal privado
+            message_id = await upload_video(
                 userbot=userbot,
-                chat_id=update.effective_chat.id,
                 filepath=filepath,
                 message=msg
             )
 
-            # BOT reenvia (aparece como bot)
-            await context.bot.send_video(
+            # BOT copia do canal para usuário
+            await context.bot.copy_message(
                 chat_id=update.effective_chat.id,
-                video=file_id,
-                caption="🎬 Aqui está seu vídeo!",
-                supports_streaming=True
+                from_chat_id=STORAGE_CHANNEL_ID,
+                message_id=message_id
             )
 
-            # Apaga arquivo local
-            os.remove(filepath)
+            # Remove arquivo local
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
             await msg.edit_text("✅ Concluído!")
 
         except Exception as e:
             await msg.edit_text(f"❌ Erro:\n{e}")
-
 
 # =====================================================
 # MAIN
@@ -135,7 +130,6 @@ def main():
 
     print("Bot iniciado...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
