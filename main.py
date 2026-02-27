@@ -1,5 +1,12 @@
 import asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler
+import re
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
 from pyrogram import Client
 from config import BOT_TOKEN, API_ID, API_HASH, SESSION_STRING
 from downloader import download_m3u8
@@ -14,31 +21,42 @@ userbot = Client(
     session_string=SESSION_STRING,
 )
 
+
 async def start_userbot(app):
     await userbot.start()
 
-async def anime(update, context):
 
-    if not context.args:
-        await update.message.reply_text("Envie um link m3u8")
+def extract_link(text):
+    match = re.search(r"(https?://\S+)", text)
+    return match.group(1) if match else None
+
+
+async def handle_link(update, context: ContextTypes.DEFAULT_TYPE):
+
+    text = update.message.text
+    url = extract_link(text)
+
+    if not url or ".m3u8" not in url:
+        await update.message.reply_text("Envie um link m3u8 válido.")
         return
-
-    url = context.args[0]
 
     async with download_lock:
 
-        msg = await update.message.reply_text("🎬 Baixando...")
+        msg = await update.message.reply_text("🎬 Iniciando download...")
 
-        async def download_progress():
-            await msg.edit_text("🎬 Convertendo...")
+        async def progress(percent):
+            bar = "█" * int(percent // 5)
+            bar = bar.ljust(20, "░")
+            await msg.edit_text(f"🎬 Baixando...\n[{bar}] {percent:.2f}%")
 
-        filepath = await download_m3u8(url, download_progress)
+        filepath = await download_m3u8(url, progress)
 
         await msg.edit_text("📤 Enviando...")
 
         await upload_video(userbot, update.effective_chat.id, filepath, msg)
 
         await msg.edit_text("✅ Concluído!")
+
 
 def main():
     app = (
@@ -48,9 +66,10 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("anime", anime))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
