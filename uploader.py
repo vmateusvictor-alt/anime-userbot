@@ -2,6 +2,7 @@ import os
 import time
 import subprocess
 
+STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
 
 def generate_thumbnail(video_path):
     thumb_path = video_path + ".jpg"
@@ -20,7 +21,7 @@ def generate_thumbnail(video_path):
     return thumb_path
 
 
-async def upload_video(userbot, chat_id, filepath, message):
+async def upload_video(userbot, filepath, message):
 
     filename = os.path.basename(filepath)
     thumb = generate_thumbnail(filepath)
@@ -48,20 +49,15 @@ async def upload_video(userbot, chat_id, filepath, message):
             except:
                 pass
 
-    await userbot.get_chat(chat_id)
-
     sent = await userbot.send_video(
-        chat_id=chat_id,
+        chat_id=STORAGE_CHANNEL_ID,
         video=filepath,
         caption=filename,
         thumb=thumb,
         supports_streaming=True,
-        file_name=filename,
         progress=progress
     )
 
-    file_id = sent.video.file_id
-
     os.remove(thumb)
 
-    return file_id
+    return sent.id
