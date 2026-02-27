@@ -2,7 +2,7 @@ import os
 import time
 import subprocess
 
-STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
+STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
 
 def generate_thumbnail(video_path):
     thumb_path = video_path + ".jpg"
@@ -58,6 +58,7 @@ async def upload_video(userbot, filepath, message):
         progress=progress
     )
 
-    os.remove(thumb)
+    if os.path.exists(thumb):
+        os.remove(thumb)
 
     return sent.id
