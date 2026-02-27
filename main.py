@@ -18,7 +18,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
+STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN não configurado!")
@@ -29,7 +29,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 download_lock = asyncio.Semaphore(1)
 
 # =====================================================
-# USERBOT (inicia apenas uma vez)
+# USERBOT
 # =====================================================
 
 userbot = Client(
@@ -82,7 +82,6 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with download_lock:
         try:
 
-            # Detecta tipo
             if ".m3u8" in url.lower():
                 filepath = await download_m3u8(url, progress)
             else:
@@ -90,21 +89,20 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await msg.edit_text("📤 Enviando para Telegram...")
 
-            # Upload para canal privado
+            # Upload para canal
             message_id = await upload_video(
                 userbot=userbot,
                 filepath=filepath,
                 message=msg
             )
 
-            # BOT copia do canal para usuário
+            # Bot copia do canal
             await context.bot.copy_message(
                 chat_id=update.effective_chat.id,
                 from_chat_id=STORAGE_CHANNEL_ID,
                 message_id=message_id
             )
 
-            # Remove arquivo local
             if os.path.exists(filepath):
                 os.remove(filepath)
 
