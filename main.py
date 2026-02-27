@@ -1,29 +1,59 @@
 import os
 import aiohttp
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from pyrogram import Client
 
-# =========================
-# TOKEN
-# =========================
+# ==============================
+# VARIÁVEIS
+# ==============================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
 
 if not BOT_TOKEN:
-    raise RuntimeError("❌ BOT_TOKEN não definido no Railway")
+    raise RuntimeError("BOT_TOKEN não definido")
+
+if not API_ID:
+    raise RuntimeError("API_ID não definido")
+
+if not API_HASH:
+    raise RuntimeError("API_HASH não definido")
+
+if not SESSION_STRING:
+    raise RuntimeError("SESSION_STRING não definido")
+
+API_ID = int(API_ID)
 
 DOWNLOAD_PATH = "/tmp/video.mp4"
 
-# =========================
-# BARRA DE PROGRESSO
-# =========================
-def progress_bar(percent: int):
+# ==============================
+# USERBOT (PYROGRAM)
+# ==============================
+
+userbot = Client(
+    "userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+)
+
+# ==============================
+# BARRA VISUAL
+# ==============================
+
+def progress_bar(percent):
     bars = int(percent // 5)
     return "█" * bars + "░" * (20 - bars)
 
-# =========================
-# DOWNLOAD EM CHUNKS (1MB)
-# =========================
-async def download_file(url: str, status_msg):
+# ==============================
+# DOWNLOAD COM PROGRESSO
+# ==============================
+
+async def download_file(url, status_msg):
     timeout = aiohttp.ClientTimeout(total=None)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -41,7 +71,7 @@ async def download_file(url: str, status_msg):
                     f.write(chunk)
                     downloaded += len(chunk)
 
-                    if total > 0:
+                    if total:
                         percent = int(downloaded * 100 / total)
 
                         if percent - last_percent >= 5:
@@ -56,9 +86,27 @@ async def download_file(url: str, status_msg):
                             except:
                                 pass
 
-# =========================
-# COMANDO /anime
-# =========================
+# ==============================
+# UPLOAD PROGRESSO
+# ==============================
+
+async def upload_progress(current, total, status_msg):
+    percent = int(current * 100 / total)
+    bar = progress_bar(percent)
+
+    if percent % 5 == 0:
+        try:
+            await status_msg.edit_text(
+                f"⬆️ Enviando...\n\n"
+                f"[{bar}] {percent}%"
+            )
+        except:
+            pass
+
+# ==============================
+# COMANDO
+# ==============================
+
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
@@ -66,7 +114,9 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = context.args[0]
-    status_msg = await update.message.reply_text("🔄 Iniciando download...")
+    chat_id = update.effective_chat.id
+
+    status_msg = await update.message.reply_text("🔄 Iniciando...")
 
     try:
         # DOWNLOAD
@@ -74,16 +124,15 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await status_msg.edit_text("⬆️ Enviando para Telegram...")
 
-        # ENVIO (até 2GB)
-        with open(DOWNLOAD_PATH, "rb") as video:
-            await context.bot.send_video(
-                chat_id=update.effective_chat.id,
-                video=video,
-                supports_streaming=True,
-                connect_timeout=60,
-                read_timeout=600,
-                write_timeout=600,
-            )
+        # UPLOAD via USERBOT (2GB permitido)
+        await userbot.send_video(
+            chat_id=chat_id,
+            video=DOWNLOAD_PATH,
+            caption="🎬 Aqui está!",
+            supports_streaming=True,
+            progress=upload_progress,
+            progress_args=(status_msg,)
+        )
 
         await status_msg.edit_text("✅ Concluído!")
 
@@ -94,23 +143,19 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(DOWNLOAD_PATH):
             os.remove(DOWNLOAD_PATH)
 
-# =========================
-# MAIN (SEM ASYNCIO.RUN)
-# =========================
+# ==============================
+# MAIN
+# ==============================
+
 def main():
 
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .connect_timeout(60)
-        .read_timeout(600)
-        .write_timeout(600)
-        .build()
-    )
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(userbot.start())
 
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("anime", anime))
 
-    print("🚀 Bot rodando em polling (anti-413)")
+    print("🚀 Bot + Userbot rodando")
     app.run_polling()
 
 if __name__ == "__main__":
