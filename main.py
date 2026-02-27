@@ -1,28 +1,32 @@
 import os
-import asyncio
 import aiohttp
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
+# =========================
+# TOKEN
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN não definido")
+    raise RuntimeError("❌ BOT_TOKEN não definido no Railway")
 
 DOWNLOAD_PATH = "/tmp/video.mp4"
 
 # =========================
-# BARRA VISUAL
+# BARRA DE PROGRESSO
 # =========================
-def progress_bar(percent):
+def progress_bar(percent: int):
     bars = int(percent // 5)
     return "█" * bars + "░" * (20 - bars)
 
 # =========================
-# DOWNLOAD EM CHUNKS
+# DOWNLOAD EM CHUNKS (1MB)
 # =========================
-async def download_file(url, status_msg):
-    async with aiohttp.ClientSession() as session:
+async def download_file(url: str, status_msg):
+    timeout = aiohttp.ClientTimeout(total=None)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(url) as resp:
 
             if resp.status != 200:
@@ -44,10 +48,13 @@ async def download_file(url, status_msg):
                             last_percent = percent
                             bar = progress_bar(percent)
 
-                            await status_msg.edit_text(
-                                f"⬇️ Baixando...\n\n"
-                                f"[{bar}] {percent}%"
-                            )
+                            try:
+                                await status_msg.edit_text(
+                                    f"⬇️ Baixando...\n\n"
+                                    f"[{bar}] {percent}%"
+                                )
+                            except:
+                                pass
 
 # =========================
 # COMANDO /anime
@@ -55,13 +62,10 @@ async def download_file(url, status_msg):
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
-        await update.message.reply_text(
-            "Use:\n/anime link_mp4"
-        )
+        await update.message.reply_text("Use:\n/anime link_mp4")
         return
 
     url = context.args[0]
-
     status_msg = await update.message.reply_text("🔄 Iniciando download...")
 
     try:
@@ -76,9 +80,9 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=update.effective_chat.id,
                 video=video,
                 supports_streaming=True,
+                connect_timeout=60,
                 read_timeout=600,
                 write_timeout=600,
-                connect_timeout=60,
             )
 
         await status_msg.edit_text("✅ Concluído!")
@@ -91,9 +95,9 @@ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(DOWNLOAD_PATH)
 
 # =========================
-# MAIN
+# MAIN (SEM ASYNCIO.RUN)
 # =========================
-async def main():
+def main():
 
     app = (
         ApplicationBuilder()
@@ -106,8 +110,8 @@ async def main():
 
     app.add_handler(CommandHandler("anime", anime))
 
-    print("🚀 Bot rodando em POLLING (anti-413)")
-    await app.run_polling()
+    print("🚀 Bot rodando em polling (anti-413)")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
