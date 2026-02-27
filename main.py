@@ -1,21 +1,16 @@
 import asyncio
-import os
-import re
 from telegram.ext import (
     ApplicationBuilder,
-    MessageHandler,
-    ContextTypes,
-    filters
+    CommandHandler,
+    ContextTypes
 )
 from pyrogram import Client
 from config import BOT_TOKEN, API_ID, API_HASH, SESSION_STRING
 from downloader import download_m3u8, download_mp4
 from uploader import upload_video
 
-# Permitir apenas 1 download por vez
 download_lock = asyncio.Semaphore(1)
 
-# Inicializar userbot
 userbot = Client(
     "userbot",
     api_id=API_ID,
@@ -23,27 +18,21 @@ userbot = Client(
     session_string=SESSION_STRING,
 )
 
-
 async def start_userbot(app):
     await userbot.start()
-
-
-def extract_link(text):
-    match = re.search(r"(https?://[^\s]+)", text)
-    return match.group(1) if match else None
 
 
 def is_m3u8(url):
     return ".m3u8" in url.lower()
 
 
-async def handle_link(update, context: ContextTypes.DEFAULT_TYPE):
+async def an_command(update, context: ContextTypes.DEFAULT_TYPE):
 
-    url = extract_link(update.message.text)
-
-    if not url:
-        await update.message.reply_text("Envie um link válido.")
+    if not context.args:
+        await update.message.reply_text("Use:\n/an link_do_video")
         return
+
+    url = context.args[0]
 
     async with download_lock:
 
@@ -58,7 +47,6 @@ async def handle_link(update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
 
-            # Detecta tipo automaticamente
             if is_m3u8(url):
                 filepath = await download_m3u8(url, progress)
             else:
@@ -89,12 +77,9 @@ def main():
         .build()
     )
 
-    # Aceita qualquer texto que não seja comando
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link)
-    )
+    app.add_handler(CommandHandler("an", an_command))
 
-    print("Bot iniciado...")
+    print("Bot iniciado com /an")
     app.run_polling()
 
 
