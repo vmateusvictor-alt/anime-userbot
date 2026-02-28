@@ -16,27 +16,25 @@ async def download_universal(url, progress_callback=None):
     last_time = 0
 
     def progress_hook(d):
-        nonlocal last_percent, last_time
+    nonlocal last_percent, last_time
 
-        if d['status'] == 'downloading':
-            if d.get("total_bytes"):
-                percent = (d["downloaded_bytes"] / d["total_bytes"]) * 100
-                now = time.time()
+    if d['status'] == 'downloading':
+        if d.get("total_bytes"):
+            percent = (d["downloaded_bytes"] / d["total_bytes"]) * 100
+            now = time.time()
 
-                # Atualiza apenas se:
-                # - passou 5%
-                # - ou passou 3 segundos
-                if percent - last_percent < 5 and now - last_time < 3:
-                    return
+            # Atualiza apenas se passou 10% OU 8 segundos
+            if percent - last_percent < 10 and now - last_time < 8:
+                return
 
-                last_percent = percent
-                last_time = now
+            last_percent = percent
+            last_time = now
 
-                if progress_callback:
-                    asyncio.run_coroutine_threadsafe(
-                        progress_callback(percent),
-                        loop
-                    )
+            if progress_callback:
+                asyncio.run_coroutine_threadsafe(
+                    progress_callback(percent),
+                    loop
+                )
 
     ydl_opts = {
         "outtmpl": output_template,
