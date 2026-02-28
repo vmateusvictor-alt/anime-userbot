@@ -16,11 +16,17 @@ async def download_universal(url, progress_callback=None):
     last_time = 0
 
     def progress_hook(d):
-    nonlocal last_percent, last_time
+        nonlocal last_percent, last_time
 
-    if d['status'] == 'downloading':
-        if d.get("total_bytes"):
-            percent = (d["downloaded_bytes"] / d["total_bytes"]) * 100
+        if d["status"] == "downloading":
+
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            downloaded = d.get("downloaded_bytes", 0)
+
+            if not total:
+                return
+
+            percent = (downloaded / total) * 100
             now = time.time()
 
             # Atualiza apenas se passou 10% OU 8 segundos
@@ -42,12 +48,14 @@ async def download_universal(url, progress_callback=None):
         "merge_output_format": "mkv",
         "noplaylist": True,
         "progress_hooks": [progress_hook],
-        "concurrent_fragment_downloads": 1,
+        "concurrent_fragment_downloads": 1,  # evita flood
         "retries": 10,
         "fragment_retries": 10,
         "http_headers": {
             "User-Agent": "Mozilla/5.0"
-        }
+        },
+        "quiet": True,
+        "no_warnings": True
     }
 
     def run():
@@ -60,7 +68,7 @@ async def download_universal(url, progress_callback=None):
     return filepath
 
 
-# Compatibilidade
+# Compatibilidade com seu main.py
 async def download_mp4(url, progress_callback=None):
     return await download_universal(url, progress_callback)
 
