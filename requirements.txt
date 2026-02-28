@@ -3,3 +3,4 @@ pyrogram
 tgcrypto
 aiohttp
 aiofiles
+yt-dlp
