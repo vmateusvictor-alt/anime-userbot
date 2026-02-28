@@ -7,7 +7,7 @@ from telegram.ext import (
     ContextTypes
 )
 from pyrogram import Client
-from downloader import download_mp4, download_m3u8
+from downloader import download_mp4, download_m3u8, download_universal
 from uploader import upload_video
 
 # =====================================================
@@ -82,27 +82,37 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with download_lock:
         try:
 
-            if ".m3u8" in url.lower():
+            url_lower = url.lower()
+
+            # Detecta tipo de link
+            if ".m3u8" in url_lower:
                 filepath = await download_m3u8(url, progress)
-            else:
+
+            elif url_lower.endswith(".mp4"):
                 filepath = await download_mp4(url, progress)
+
+            else:
+                # Google Drive, páginas, embed, etc
+                await msg.edit_text("🔎 Detectando fonte do vídeo...")
+                filepath = await download_universal(url, progress)
 
             await msg.edit_text("📤 Enviando para Telegram...")
 
-            # Upload para canal
+            # Upload para canal storage
             message_id = await upload_video(
                 userbot=userbot,
                 filepath=filepath,
                 message=msg
             )
 
-            # Bot copia do canal
+            # Bot copia para o usuário
             await context.bot.copy_message(
                 chat_id=update.effective_chat.id,
                 from_chat_id=STORAGE_CHANNEL_ID,
                 message_id=message_id
             )
 
+            # Remove arquivo local
             if os.path.exists(filepath):
                 os.remove(filepath)
 
