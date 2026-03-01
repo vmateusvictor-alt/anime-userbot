@@ -8,24 +8,35 @@ from telegram.ext import (
     ContextTypes
 )
 from pyrogram import Client
-from downloader import process_link
+from downloader import download_mp4, download_m3u8, download_universal
 from uploader import upload_video
 
+
 # =====================================================
-# VARIÁVEIS
+# VARIÁVEIS DE AMBIENTE
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
+STORAGE_CHANNEL_RAW = os.getenv("STORAGE_CHANNEL_ID")
+
+if not all([BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, STORAGE_CHANNEL_RAW]):
+    raise ValueError("Variáveis de ambiente faltando.")
+
+# aceita @username ou ID numérico
+if STORAGE_CHANNEL_RAW.startswith("@"):
+    STORAGE_CHANNEL_ID = STORAGE_CHANNEL_RAW
+else:
+    STORAGE_CHANNEL_ID = int(STORAGE_CHANNEL_RAW)
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+
 # =====================================================
-# USERBOT
+# USERBOT OTIMIZADO (MTProto)
 # =====================================================
 
 userbot = Client(
@@ -34,20 +45,20 @@ userbot = Client(
     api_hash=API_HASH,
     session_string=SESSION_STRING,
     no_updates=True,
-    workers=10,              # mais paralelismo
-    sleep_threshold=60       # evita flood pequeno
-)
+    workers=10,
+    sleep_threshold=60
 )
 
+
 # =====================================================
-# FILA GLOBAL (1 POR VEZ)
+# FILA GLOBAL (1 PROCESSO POR VEZ)
 # =====================================================
 
 download_queue = asyncio.Queue()
-active_tasks = {}
+
 
 # =====================================================
-# WORKER
+# WORKER PRINCIPAL
 # =====================================================
 
 async def worker(app):
@@ -60,8 +71,6 @@ async def worker(app):
         url = task["url"]
         msg = task["message"]
 
-        active_tasks[task_id] = task
-
         try:
             await msg.edit_text("📥 Iniciando download...")
 
@@ -69,81 +78,56 @@ async def worker(app):
 
             async def progress(percent):
                 nonlocal last_percent
-
-                if percent - last_percent >= 5:
+                if percent - last_percent >= 10:
                     last_percent = percent
-                    bar = "█" * int(percent // 5)
-                    bar = bar.ljust(20, "░")
                     try:
                         await msg.edit_text(
-                            f"📥 Baixando...\n[{bar}] {percent:.2f}%"
+                            f"📥 Baixando...\n{percent:.0f}%"
                         )
                     except:
                         pass
 
-            # 🔥 AGORA USA process_link (SUPORTA TUDO)
-            result = await process_link(url, progress)
+            url_lower = url.lower()
 
-            # ==========================================
-            # SE FOR PASTA (LISTA DE ARQUIVOS)
-            # ==========================================
+            # Detectar tipo de link
+            if ".m3u8" in url_lower:
+                filepath = await download_m3u8(url, progress)
 
-            if isinstance(result, list):
-
-                for filepath in result:
-
-                    await msg.edit_text("📤 Enviando para canal...")
-
-                    message_id = await upload_video(
-                        userbot=userbot,
-                        filepath=filepath,
-                        message=msg,
-                        storage_chat_id=STORAGE_CHANNEL_ID
-                    )
-
-                    await app.bot.copy_message(
-                        chat_id=chat_id,
-                        from_chat_id=STORAGE_CHANNEL_ID,
-                        message_id=message_id
-                    )
-
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-
-                await msg.edit_text("✅ Pasta concluída!")
-
-            # ==========================================
-            # ARQUIVO ÚNICO
-            # ==========================================
+            elif url_lower.endswith(".mp4") or url_lower.endswith(".mkv"):
+                filepath = await download_mp4(url, progress)
 
             else:
+                await msg.edit_text("🔎 Detectando fonte...")
+                filepath = await download_universal(url, progress)
 
-                await msg.edit_text("📤 Enviando para canal...")
+            await msg.edit_text("📤 Enviando para o canal...")
 
-                message_id = await upload_video(
-                    userbot=userbot,
-                    filepath=result,
-                    message=msg,
-                    storage_chat_id=STORAGE_CHANNEL_ID
-                )
+            message_id = await upload_video(
+                userbot=userbot,
+                filepath=filepath,
+                message=msg,
+                storage_chat_id=STORAGE_CHANNEL_ID
+            )
 
-                await app.bot.copy_message(
-                    chat_id=chat_id,
-                    from_chat_id=STORAGE_CHANNEL_ID,
-                    message_id=message_id
-                )
+            # Copiar instantaneamente para o grupo
+            await app.bot.copy_message(
+                chat_id=chat_id,
+                from_chat_id=STORAGE_CHANNEL_ID,
+                message_id=message_id
+            )
 
-                if os.path.exists(result):
-                    os.remove(result)
+            # Remover arquivo após envio
+            if os.path.exists(filepath):
+                os.remove(filepath)
 
-                await msg.edit_text("✅ Concluído!")
+            await msg.edit_text("✅ Concluído!")
 
         except Exception as e:
             await msg.edit_text(f"❌ Erro:\n{e}")
 
         finally:
-            active_tasks.pop(task_id, None)
             download_queue.task_done()
+
 
 # =====================================================
 # COMANDO /an
@@ -158,7 +142,9 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Use:\n/an link")
+        await update.message.reply_text(
+            "Use:\n/an link"
+        )
         return
 
     url = context.args[0]
@@ -179,57 +165,23 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     position = download_queue.qsize()
 
     await msg.edit_text(
-        f"📌 Tarefa ID: {task_id}\n"
+        f"📌 ID: {task_id}\n"
         f"📥 Posição na fila: {position}"
     )
 
-# =====================================================
-# CANCELAR
-# =====================================================
-
-async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not context.args:
-        await update.message.reply_text("Use:\n/cancel ID")
-        return
-
-    task_id = context.args[0]
-
-    if task_id in active_tasks:
-        await update.message.reply_text(
-            "⚠️ Não é possível cancelar tarefa em execução."
-        )
-        return
-
-    new_queue = asyncio.Queue()
-    cancelled = False
-
-    while not download_queue.empty():
-        task = await download_queue.get()
-        if task["id"] == task_id:
-            cancelled = True
-            download_queue.task_done()
-            continue
-        await new_queue.put(task)
-        download_queue.task_done()
-
-    download_queue._queue = new_queue._queue
-
-    if cancelled:
-        await update.message.reply_text("✅ Tarefa cancelada.")
-    else:
-        await update.message.reply_text("❌ ID não encontrado.")
 
 # =====================================================
-# START USERBOT
+# INICIAR USERBOT + WORKER
 # =====================================================
 
-async def start_userbot(app):
+async def start_services(app):
 
-    if not userbot.is_connected:
-        await userbot.start()
+    print("🔌 Iniciando userbot...")
+    await userbot.start()
 
+    print("⚙ Worker iniciado.")
     asyncio.create_task(worker(app))
+
 
 # =====================================================
 # MAIN
@@ -240,15 +192,15 @@ def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .post_init(start_userbot)
+        .post_init(start_services)
         .build()
     )
 
     app.add_handler(CommandHandler("an", anime_handler))
-    app.add_handler(CommandHandler("cancel", cancel_handler))
 
-    print("🚀 Bot iniciado com fila otimizada...")
+    print("🚀 Bot iniciado...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
