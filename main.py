@@ -2,27 +2,38 @@ import os
 import asyncio
 import uuid
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from pyrogram import Client
 from downloader import download_mp4, download_m3u8, download_universal
 from uploader import upload_video
 
 # =====================================================
-# VARIÁVEIS
+# CONFIG
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
+STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
 
 DOWNLOAD_DIR = "downloads"
+AUTHORIZED_FILE = "authorized_users.txt"
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# =====================================================
+# CARREGAR USUÁRIOS AUTORIZADOS
+# =====================================================
+
+def load_authorized_users():
+    if not os.path.exists(AUTHORIZED_FILE):
+        return set()
+
+    with open(AUTHORIZED_FILE, "r") as f:
+        return set(int(line.strip()) for line in f if line.strip().isdigit())
+
+AUTHORIZED_USERS = load_authorized_users()
 
 # =====================================================
 # USERBOT
@@ -37,11 +48,10 @@ userbot = Client(
 )
 
 # =====================================================
-# FILA GLOBAL
+# FILA GLOBAL (1 WORKER)
 # =====================================================
 
 download_queue = asyncio.Queue()
-active_tasks = {}
 
 # =====================================================
 # WORKER
@@ -57,24 +67,18 @@ async def worker(app):
         url = task["url"]
         msg = task["message"]
 
-        active_tasks[task_id] = task
-
         try:
-
             await msg.edit_text("📥 Iniciando download...")
 
-            last_percent = 0
+            last_update = 0
 
             async def progress(percent):
-                nonlocal last_percent
-
-                if percent - last_percent >= 2:
-                    last_percent = percent
-                    bar = "█" * int(percent // 5)
-                    bar = bar.ljust(20, "░")
+                nonlocal last_update
+                if percent - last_update >= 15:
+                    last_update = percent
                     try:
                         await msg.edit_text(
-                            f"📥 Baixando...\n[{bar}] {percent:.2f}%"
+                            f"📥 Baixando... {percent:.0f}%"
                         )
                     except:
                         pass
@@ -83,13 +87,15 @@ async def worker(app):
 
             if ".m3u8" in url_lower:
                 filepath = await download_m3u8(url, progress)
+
             elif url_lower.endswith(".mp4"):
                 filepath = await download_mp4(url, progress)
+
             else:
                 await msg.edit_text("🔎 Detectando fonte...")
                 filepath = await download_universal(url, progress)
 
-            await msg.edit_text("📤 Enviando para Telegram...")
+            await msg.edit_text("📤 Enviando...")
 
             message_id = await upload_video(
                 userbot=userbot,
@@ -97,6 +103,7 @@ async def worker(app):
                 message=msg
             )
 
+            # COPIA IMEDIATA PARA O GRUPO
             await app.bot.copy_message(
                 chat_id=chat_id,
                 from_chat_id=STORAGE_CHANNEL_ID,
@@ -112,19 +119,22 @@ async def worker(app):
             await msg.edit_text(f"❌ Erro:\n{e}")
 
         finally:
-            active_tasks.pop(task_id, None)
             download_queue.task_done()
 
 # =====================================================
-# COMANDO /an (APENAS GRUPOS)
+# COMANDO /an
 # =====================================================
 
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_chat.type == "private":
-        await update.message.reply_text(
-            "❌ Este bot funciona apenas em grupos."
-        )
+        await update.message.reply_text("❌ Apenas grupos.")
+        return
+
+    user_id = update.effective_user.id
+
+    if AUTHORIZED_USERS and user_id not in AUTHORIZED_USERS:
+        await update.message.reply_text("⛔ Você não está autorizado.")
         return
 
     if not context.args:
@@ -149,55 +159,16 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     position = download_queue.qsize()
 
     await msg.edit_text(
-        f"📌 Tarefa ID: {task_id}\n"
+        f"📌 ID: {task_id}\n"
         f"📥 Posição na fila: {position}"
     )
 
 # =====================================================
-# CANCELAR TAREFA
+# START
 # =====================================================
 
-async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_bot(app):
 
-    if not context.args:
-        await update.message.reply_text("Use:\n/cancel ID")
-        return
-
-    task_id = context.args[0]
-
-    # Cancelar tarefa ativa
-    if task_id in active_tasks:
-        await update.message.reply_text(
-            "⚠️ Não é possível cancelar tarefa em execução."
-        )
-        return
-
-    # Remover da fila
-    new_queue = asyncio.Queue()
-
-    cancelled = False
-
-    while not download_queue.empty():
-        task = await download_queue.get()
-        if task["id"] == task_id:
-            cancelled = True
-            download_queue.task_done()
-            continue
-        await new_queue.put(task)
-        download_queue.task_done()
-
-    download_queue._queue = new_queue._queue
-
-    if cancelled:
-        await update.message.reply_text("✅ Tarefa cancelada.")
-    else:
-        await update.message.reply_text("❌ ID não encontrado.")
-
-# =====================================================
-# START USERBOT
-# =====================================================
-
-async def start_userbot(app):
     if not userbot.is_connected:
         await userbot.start()
 
@@ -212,14 +183,13 @@ def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .post_init(start_userbot)
+        .post_init(start_bot)
         .build()
     )
 
     app.add_handler(CommandHandler("an", anime_handler))
-    app.add_handler(CommandHandler("cancel", cancel_handler))
 
-    print("Bot iniciado com fila avançada...")
+    print("🚀 Bot otimizado iniciado...")
     app.run_polling()
 
 if __name__ == "__main__":
