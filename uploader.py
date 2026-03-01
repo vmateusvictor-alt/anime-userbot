@@ -1,21 +1,17 @@
 import os
+import time
 import subprocess
 
 STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
 
 
-# =====================================================
-# PEGAR INFO COMPLETA DO VÍDEO
-# =====================================================
-
 def get_video_info(video_path):
     cmd = [
         "ffprobe",
         "-v", "error",
-        "-show_entries",
-        "format=duration:stream=width,height",
-        "-of",
-        "default=noprint_wrappers=1",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,duration",
+        "-of", "default=noprint_wrappers=1",
         video_path
     ]
 
@@ -26,33 +22,15 @@ def get_video_info(video_path):
     duration = 0
 
     for line in result.stdout.splitlines():
-
         if line.startswith("width="):
-            try:
-                width = int(line.split("=")[1])
-            except:
-                pass
-
+            width = int(line.split("=")[1])
         elif line.startswith("height="):
-            try:
-                height = int(line.split("=")[1])
-            except:
-                pass
-
+            height = int(line.split("=")[1])
         elif line.startswith("duration="):
-            value = line.split("=")[1]
-            if value != "N/A":
-                try:
-                    duration = int(float(value))
-                except:
-                    duration = 0
+            duration = int(float(line.split("=")[1]))
 
     return width, height, duration
 
-
-# =====================================================
-# GERAR THUMB
-# =====================================================
 
 def generate_thumbnail(video_path):
     thumb_path = video_path + ".jpg"
@@ -60,7 +38,7 @@ def generate_thumbnail(video_path):
     cmd = [
         "ffmpeg",
         "-i", video_path,
-        "-ss", "00:00:05",
+        "-ss", "00:00:03",
         "-vframes", "1",
         thumb_path,
         "-y"
@@ -68,41 +46,51 @@ def generate_thumbnail(video_path):
 
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    if os.path.exists(thumb_path):
-        return thumb_path
+    return thumb_path
 
-    return None
-
-
-# =====================================================
-# UPLOAD COM NOME + DURAÇÃO CORRETOS
-# =====================================================
 
 async def upload_video(userbot, filepath, message):
 
-    width, height, duration = get_video_info(filepath)
+    filename = os.path.basename(filepath)
     thumb = generate_thumbnail(filepath)
+    width, height, duration = get_video_info(filepath)
 
-    # Nome real do arquivo
-    file_name = os.path.basename(filepath)
+    last_percent = 0
+    last_edit_time = 0
 
-    # Se duração falhar, tenta pegar manualmente
-    if duration == 0:
-        duration = 1  # evita 0:00
+    async def progress(current, total):
+        nonlocal last_percent, last_edit_time
+
+        percent = (current / total) * 100
+        now = time.time()
+
+        if percent - last_percent >= 3 or (now - last_edit_time) > 2:
+            last_percent = percent
+            last_edit_time = now
+
+            bar = "█" * int(percent // 5)
+            bar = bar.ljust(20, "░")
+
+            try:
+                await message.edit_text(
+                    f"📤 Enviando...\n[{bar}] {percent:.2f}%"
+                )
+            except:
+                pass
 
     sent = await userbot.send_video(
         chat_id=STORAGE_CHANNEL_ID,
         video=filepath,
+        caption=filename,
+        thumb=thumb,
         duration=duration,
         width=width,
         height=height,
-        thumb=thumb,
         supports_streaming=True,
-        file_name=file_name,
-        caption=file_name
+        progress=progress
     )
 
-    if thumb and os.path.exists(thumb):
+    if os.path.exists(thumb):
         os.remove(thumb)
 
     return sent.id
