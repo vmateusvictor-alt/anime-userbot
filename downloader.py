@@ -55,9 +55,6 @@ async def extract_all_videos_from_folder(url):
 
 async def download_direct(url, progress_callback=None):
 
-    filename = str(uuid.uuid4()) + ".mp4"
-    output_path = os.path.join(DOWNLOAD_DIR, filename)
-
     timeout = aiohttp.ClientTimeout(total=None)
 
     async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS) as session:
@@ -65,6 +62,25 @@ async def download_direct(url, progress_callback=None):
 
             if resp.status != 200:
                 raise Exception(f"Erro HTTP {resp.status}")
+
+            # 🔥 PEGAR NOME REAL DO HEADER
+            filename = None
+            content_disposition = resp.headers.get("Content-Disposition")
+
+            if content_disposition:
+                match = re.findall('filename="?([^"]+)"?', content_disposition)
+                if match:
+                    filename = match[0]
+
+            # Se não tiver no header, tenta pegar da URL
+            if not filename:
+                filename = os.path.basename(url.split("?")[0])
+
+            # Se ainda for nome inválido
+            if not filename or "." not in filename:
+                filename = str(uuid.uuid4()) + ".mp4"
+
+            output_path = os.path.join(DOWNLOAD_DIR, filename)
 
             total = int(resp.headers.get("content-length", 0))
             downloaded = 0
@@ -77,7 +93,7 @@ async def download_direct(url, progress_callback=None):
 
                     if total and progress_callback:
                         percent = (downloaded / total) * 100
-                        if percent - last_percent >= 15:
+                        if percent - last_percent >= 10:
                             last_percent = percent
                             await progress_callback(percent)
 
