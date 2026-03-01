@@ -1,136 +1,214 @@
 import os
 import asyncio
-import logging
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from pyrogram import Client
 from downloader import process_link
 from uploader import upload_video
 
+# =====================================================
+# CONFIG
+# =====================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-STORAGE_CHANNEL = os.getenv("STORAGE_CHANNEL")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+SESSION_STRING = os.getenv("SESSION_STRING")
+
+storage_value = os.getenv("STORAGE_CHANNEL_ID")
+
+if storage_value.startswith("@"):
+    STORAGE_CHANNEL_ID = storage_value
+else:
+    STORAGE_CHANNEL_ID = int(storage_value)
+
+DOWNLOAD_DIR = "downloads"
 AUTHORIZED_FILE = "authorized_users.txt"
 
-DOWNLOAD_QUEUE = asyncio.Queue()
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO)
-
-
-# ======================
-# AUTORIZAÇÃO
-# ======================
+# =====================================================
+# CARREGAR USUÁRIOS AUTORIZADOS
+# =====================================================
 
 def load_authorized_users():
     if not os.path.exists(AUTHORIZED_FILE):
         return set()
+
     with open(AUTHORIZED_FILE, "r") as f:
-        return set(line.strip() for line in f.readlines())
+        return set(int(line.strip()) for line in f if line.strip().isdigit())
 
 AUTHORIZED_USERS = load_authorized_users()
 
-def is_authorized(user_id):
-    return str(user_id) in AUTHORIZED_USERS
+# =====================================================
+# USERBOT
+# =====================================================
 
+userbot = Client(
+    "userbot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+    no_updates=True
+)
 
-# ======================
-# COMANDOS
-# ======================
+# =====================================================
+# FILA GLOBAL (1 POR VEZ)
+# =====================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot funcionando.")
+download_queue = asyncio.Queue()
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("❌ Não autorizado.")
-        return
-
-    text = update.message.text.strip()
-
-    if not text.startswith("/an"):
-        return
-
-    try:
-        url = text.split(" ", 1)[1]
-    except:
-        await update.message.reply_text("Use: /an link")
-        return
-
-    await DOWNLOAD_QUEUE.put((update, url))
-    await update.message.reply_text("📥 Adicionado à fila.")
-
-
-# ======================
+# =====================================================
 # WORKER
-# ======================
+# =====================================================
 
 async def worker(app):
+
     while True:
-        update, url = await DOWNLOAD_QUEUE.get()
+        task = await download_queue.get()
+
+        chat_id = task["chat_id"]
+        url = task["url"]
+        msg = task["message"]
 
         try:
-            await update.message.reply_text("⬇ Baixando...")
+            await msg.edit_text("📥 Iniciando download...")
 
-            result = await process_link(url)
+            last_update = 0
+
+            async def progress(percent):
+                nonlocal last_update
+                if percent - last_update >= 15:
+                    last_update = percent
+                    try:
+                        await msg.edit_text(f"📥 Baixando... {percent:.0f}%")
+                    except:
+                        pass
+
+            result = await process_link(url, progress)
+
+            # ==========================================
+            # SE FOR PASTA (lista de arquivos)
+            # ==========================================
 
             if isinstance(result, list):
-                for file_path in result:
-                    msg = await upload_video(app, file_path)
 
-                    await app.bot.forward_message(
-                        chat_id=update.effective_chat.id,
-                        from_chat_id=STORAGE_CHANNEL,
-                        message_id=msg.message_id
+                for filepath in result:
+
+                    await msg.edit_text("📤 Enviando para o canal...")
+
+                    message_id = await upload_video(
+                        userbot=userbot,
+                        filepath=filepath,
+                        message=msg
                     )
 
-                    os.remove(file_path)
-            else:
-                msg = await upload_video(app, result)
+                    await app.bot.copy_message(
+                        chat_id=chat_id,
+                        from_chat_id=STORAGE_CHANNEL_ID,
+                        message_id=message_id
+                    )
 
-                await app.bot.forward_message(
-                    chat_id=update.effective_chat.id,
-                    from_chat_id=STORAGE_CHANNEL,
-                    message_id=msg.message_id
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+
+                await msg.edit_text("✅ Pasta concluída!")
+
+            # ==========================================
+            # ARQUIVO ÚNICO
+            # ==========================================
+
+            else:
+
+                await msg.edit_text("📤 Enviando para o canal...")
+
+                message_id = await upload_video(
+                    userbot=userbot,
+                    filepath=result,
+                    message=msg
                 )
 
-                os.remove(result)
+                await app.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=STORAGE_CHANNEL_ID,
+                    message_id=message_id
+                )
 
-            await update.message.reply_text("✅ Concluído.")
+                if os.path.exists(result):
+                    os.remove(result)
+
+                await msg.edit_text("✅ Concluído!")
 
         except Exception as e:
-            await update.message.reply_text(f"Erro: {e}")
+            await msg.edit_text(f"❌ Erro:\n{e}")
 
-        DOWNLOAD_QUEUE.task_done()
+        finally:
+            download_queue.task_done()
 
+# =====================================================
+# COMANDO /an
+# =====================================================
 
-# ======================
-# INICIALIZAÇÃO CORRETA
-# ======================
+async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-async def main():
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Apenas grupos.")
+        return
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    user_id = update.effective_user.id
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    if AUTHORIZED_USERS and user_id not in AUTHORIZED_USERS:
+        await update.message.reply_text("⛔ Você não está autorizado.")
+        return
 
-    # Inicia worker após inicializar
-    await app.initialize()
-    await app.start()
+    if not context.args:
+        await update.message.reply_text("Use:\n/an link")
+        return
+
+    url = context.args[0]
+
+    msg = await update.message.reply_text("📥 Adicionado à fila...")
+
+    task = {
+        "chat_id": update.effective_chat.id,
+        "url": url,
+        "message": msg
+    }
+
+    await download_queue.put(task)
+
+    position = download_queue.qsize()
+
+    await msg.edit_text(f"📥 Posição na fila: {position}")
+
+# =====================================================
+# START
+# =====================================================
+
+async def start_bot(app):
+
+    if not userbot.is_connected:
+        await userbot.start()
 
     asyncio.create_task(worker(app))
 
-    print("Bot iniciado...")
-    await app.updater.start_polling()
+# =====================================================
+# MAIN
+# =====================================================
 
-    await app.updater.idle()
+def main():
 
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .post_init(start_bot)
+        .build()
+    )
+
+    app.add_handler(CommandHandler("an", anime_handler))
+
+    print("🚀 Bot iniciado...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
+    main()
