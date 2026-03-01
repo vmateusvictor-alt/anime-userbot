@@ -2,10 +2,10 @@ import os
 import asyncio
 import aiohttp
 import re
+import uuid
 
 DOWNLOAD_DIR = "downloads"
 CHUNK_SIZE = 4 * 1024 * 1024
-
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".m3u8")
 
 HEADERS = {
@@ -14,8 +14,9 @@ HEADERS = {
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+
 # =====================================================
-# LISTAR TODOS OS VÍDEOS DE UMA PASTA INDEX
+# EXTRAIR VÍDEOS DE PASTA HTML
 # =====================================================
 
 async def extract_all_videos_from_folder(url):
@@ -28,7 +29,6 @@ async def extract_all_videos_from_folder(url):
             html = await resp.text()
 
     links = re.findall(r'href="([^"]+)"', html)
-
     video_links = []
 
     for link in links:
@@ -50,21 +50,21 @@ async def extract_all_videos_from_folder(url):
 
 
 # =====================================================
-# DOWNLOAD DIRETO (MP4 / MKV)
+# DOWNLOAD DIRETO (BINÁRIO / MP4 / MKV)
 # =====================================================
 
 async def download_direct(url, progress_callback=None):
 
-    filename = url.split("/")[-1].split("?")[0]
+    filename = str(uuid.uuid4()) + ".mp4"
     output_path = os.path.join(DOWNLOAD_DIR, filename)
 
     timeout = aiohttp.ClientTimeout(total=None)
 
     async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS) as session:
-        async with session.get(url) as resp:
+        async with session.get(url, allow_redirects=True) as resp:
 
             if resp.status != 200:
-                raise Exception(f"HTTP {resp.status}")
+                raise Exception(f"Erro HTTP {resp.status}")
 
             total = int(resp.headers.get("content-length", 0))
             downloaded = 0
@@ -90,7 +90,7 @@ async def download_direct(url, progress_callback=None):
 
 async def download_m3u8(url, progress_callback=None):
 
-    filename = "video_" + str(asyncio.get_event_loop().time()).replace(".", "") + ".mp4"
+    filename = str(uuid.uuid4()) + ".mp4"
     output_path = os.path.join(DOWNLOAD_DIR, filename)
 
     cmd = [
@@ -149,25 +149,7 @@ async def process_link(url, progress_callback=None):
     url_lower = url.lower()
 
     # ==========================================
-    # SE FOR PASTA INDEX
-    # ==========================================
-
-    if url_lower.endswith("/"):
-
-        video_links = await extract_all_videos_from_folder(url)
-
-        results = []
-
-        for video_url in video_links:
-
-            result = await process_link(video_url, progress_callback)
-            results.append(result)
-
-        return results
-
-
-    # ==========================================
-    # ARQUIVOS DIRETOS
+    # EXTENSÃO DIRETA
     # ==========================================
 
     if url_lower.endswith(".m3u8"):
@@ -176,33 +158,58 @@ async def process_link(url, progress_callback=None):
     if url_lower.endswith((".mp4", ".mkv")):
         return await download_direct(url, progress_callback)
 
+    # ==========================================
+    # TESTAR SE É ARQUIVO DIRETO (HEAD)
+    # ==========================================
+
+    try:
+        async with aiohttp.ClientSession(headers=HEADERS) as session:
+            async with session.head(url, allow_redirects=True) as resp:
+
+                content_type = resp.headers.get("content-type", "")
+                content_disp = resp.headers.get("content-disposition", "")
+
+                if (
+                    "video" in content_type
+                    or "octet-stream" in content_type
+                    or "attachment" in content_disp
+                ):
+                    return await download_direct(url, progress_callback)
+
+    except:
+        pass
 
     # ==========================================
-    # TENTA DETECTAR SE É PASTA HTML
+    # TESTAR SE É PASTA HTML
     # ==========================================
 
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.get(url) as resp:
+
                 content_type = resp.headers.get("content-type", "")
+
                 if "text/html" in content_type:
+
                     html = await resp.text()
 
                     if any(ext in html.lower() for ext in VIDEO_EXTENSIONS):
+
                         video_links = await extract_all_videos_from_folder(url)
 
                         results = []
+
                         for video_url in video_links:
                             result = await process_link(video_url, progress_callback)
                             results.append(result)
 
                         return results
+
     except:
         pass
 
-
     # ==========================================
-    # FALLBACK UNIVERSAL (Drive, Streamtape etc)
+    # FALLBACK UNIVERSAL
     # ==========================================
 
     return await download_with_ytdlp(url)
