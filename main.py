@@ -1,197 +1,163 @@
 import os
 import asyncio
-import uuid
+import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from pyrogram import Client
-from downloader import download_mp4, download_m3u8, download_universal
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+from downloader import process_link
 from uploader import upload_video
 
-# =====================================================
+# ==============================
 # CONFIG
-# =====================================================
+# ==============================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-SESSION_STRING = os.getenv("SESSION_STRING")
-
-# ACEITA @username OU ID
-storage_value = os.getenv("STORAGE_CHANNEL_ID")
-if storage_value.startswith("@"):
-    STORAGE_CHANNEL_ID = storage_value
-else:
-    STORAGE_CHANNEL_ID = int(storage_value)
-
-DOWNLOAD_DIR = "downloads"
+STORAGE_CHANNEL = os.getenv("STORAGE_CHANNEL")  # @canalusername
 AUTHORIZED_FILE = "authorized_users.txt"
 
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+DOWNLOAD_QUEUE = asyncio.Queue()
+IS_PROCESSING = False
 
-# =====================================================
-# CARREGAR USUÁRIOS AUTORIZADOS
-# =====================================================
+logging.basicConfig(level=logging.INFO)
+
+
+# ==============================
+# USUÁRIOS AUTORIZADOS
+# ==============================
 
 def load_authorized_users():
     if not os.path.exists(AUTHORIZED_FILE):
         return set()
-
     with open(AUTHORIZED_FILE, "r") as f:
-        return set(int(line.strip()) for line in f if line.strip().isdigit())
+        return set(line.strip() for line in f.readlines())
+
+
+def save_authorized_user(user_id):
+    with open(AUTHORIZED_FILE, "a") as f:
+        f.write(f"{user_id}\n")
+
 
 AUTHORIZED_USERS = load_authorized_users()
 
-# =====================================================
-# USERBOT
-# =====================================================
 
-userbot = Client(
-    "userbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-    no_updates=True
-)
+def is_authorized(user_id):
+    return str(user_id) in AUTHORIZED_USERS
 
-# =====================================================
-# FILA GLOBAL
-# =====================================================
 
-download_queue = asyncio.Queue()
+# ==============================
+# COMANDOS
+# ==============================
 
-# =====================================================
-# WORKER (1 POR VEZ)
-# =====================================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Bot online.")
+
+
+async def authorize(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.reply_to_message.from_user.id
+
+    if not is_authorized(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas usuários autorizados podem autorizar outros.")
+        return
+
+    save_authorized_user(user_id)
+    AUTHORIZED_USERS.add(str(user_id))
+    await update.message.reply_text("✅ Usuário autorizado.")
+
+
+async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if not is_authorized(user_id):
+        await update.message.reply_text("❌ Você não está autorizado.")
+        return
+
+    text = update.message.text.strip()
+
+    if not text.startswith("/an"):
+        return
+
+    try:
+        url = text.split(" ", 1)[1]
+    except:
+        await update.message.reply_text("⚠ Use: /an link")
+        return
+
+    await DOWNLOAD_QUEUE.put((update, url))
+    await update.message.reply_text("📥 Adicionado à fila.")
+
+
+# ==============================
+# WORKER GLOBAL (1 POR VEZ)
+# ==============================
 
 async def worker(app):
 
-    while True:
-        task = await download_queue.get()
+    global IS_PROCESSING
 
-        chat_id = task["chat_id"]
-        url = task["url"]
-        msg = task["message"]
+    while True:
+        update, url = await DOWNLOAD_QUEUE.get()
 
         try:
-            await msg.edit_text("📥 Iniciando download...")
+            IS_PROCESSING = True
+            await update.message.reply_text("⬇ Baixando...")
 
-            last_update = 0
+            result = await process_link(url)
 
-            async def progress(percent):
-                nonlocal last_update
-                if percent - last_update >= 15:
-                    last_update = percent
-                    try:
-                        await msg.edit_text(
-                            f"📥 Baixando... {percent:.0f}%"
-                        )
-                    except:
-                        pass
+            if isinstance(result, list):
 
-            url_lower = url.lower()
+                for file_path in result:
+                    msg = await upload_video(app, file_path)
 
-            if ".m3u8" in url_lower:
-                filepath = await download_m3u8(url, progress)
+                    # encaminha para grupo
+                    await app.bot.forward_message(
+                        chat_id=update.effective_chat.id,
+                        from_chat_id=STORAGE_CHANNEL,
+                        message_id=msg.message_id
+                    )
 
-            elif url_lower.endswith(".mp4"):
-                filepath = await download_mp4(url, progress)
+                    os.remove(file_path)
 
             else:
-                await msg.edit_text("🔎 Detectando fonte...")
-                filepath = await download_universal(url, progress)
+                msg = await upload_video(app, result)
 
-            await msg.edit_text("📤 Enviando para o canal...")
+                await app.bot.forward_message(
+                    chat_id=update.effective_chat.id,
+                    from_chat_id=STORAGE_CHANNEL,
+                    message_id=msg.message_id
+                )
 
-            message_id = await upload_video(
-                userbot=userbot,
-                filepath=filepath,
-                message=msg
-            )
+                os.remove(result)
 
-            # COPIA IMEDIATA PARA O GRUPO
-            await app.bot.copy_message(
-                chat_id=chat_id,
-                from_chat_id=STORAGE_CHANNEL_ID,
-                message_id=message_id
-            )
-
-            if os.path.exists(filepath):
-                os.remove(filepath)
-
-            await msg.edit_text("✅ Concluído!")
+            await update.message.reply_text("✅ Concluído.")
 
         except Exception as e:
-            await msg.edit_text(f"❌ Erro:\n{e}")
+            await update.message.reply_text(f"❌ Erro: {e}")
 
-        finally:
-            download_queue.task_done()
+        IS_PROCESSING = False
+        DOWNLOAD_QUEUE.task_done()
 
-# =====================================================
-# COMANDO /an
-# =====================================================
 
-async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ==============================
+# MAIN
+# ==============================
 
-    if update.effective_chat.type == "private":
-        await update.message.reply_text("❌ Apenas grupos.")
-        return
+async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    user_id = update.effective_user.id
-
-    if AUTHORIZED_USERS and user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("⛔ Você não está autorizado.")
-        return
-
-    if not context.args:
-        await update.message.reply_text("Use:\n/an link")
-        return
-
-    url = context.args[0]
-
-    msg = await update.message.reply_text("📥 Adicionado à fila...")
-
-    task = {
-        "chat_id": update.effective_chat.id,
-        "url": url,
-        "message": msg
-    }
-
-    await download_queue.put(task)
-
-    position = download_queue.qsize()
-
-    await msg.edit_text(
-        f"📥 Posição na fila: {position}"
-    )
-
-# =====================================================
-# START
-# =====================================================
-
-async def start_bot(app):
-
-    if not userbot.is_connected:
-        await userbot.start()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("auth", authorize))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
     asyncio.create_task(worker(app))
 
-# =====================================================
-# MAIN
-# =====================================================
+    print("Bot iniciado...")
+    await app.run_polling()
 
-def main():
-
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .post_init(start_bot)
-        .build()
-    )
-
-    app.add_handler(CommandHandler("an", anime_handler))
-
-    print("🚀 Bot iniciado...")
-    app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
