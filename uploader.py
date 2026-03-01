@@ -1,10 +1,9 @@
 import os
 import asyncio
 import json
-from pyrogram.types import Video
 
 # =====================================================
-# PEGAR METADATA COM FFMPEG
+# METADATA
 # =====================================================
 
 async def get_video_metadata(filepath):
@@ -25,25 +24,19 @@ async def get_video_metadata(filepath):
     )
 
     stdout, _ = await process.communicate()
-
     data = json.loads(stdout.decode())
 
     duration = 0
     width = 0
     height = 0
 
-    # duration
     try:
         raw_duration = data.get("format", {}).get("duration", 0)
-
         if raw_duration and raw_duration != "N/A":
             duration = int(float(raw_duration))
-        else:
-            duration = 0
     except:
         duration = 0
 
-    # video stream
     for stream in data.get("streams", []):
         if stream.get("codec_type") == "video":
             width = stream.get("width", 0) or 0
@@ -54,22 +47,23 @@ async def get_video_metadata(filepath):
 
 
 # =====================================================
-# UPLOAD VIDEO
+# UPLOAD REAL
 # =====================================================
 
-async def upload_video(userbot, filepath, message):
+async def upload_video(userbot, filepath, message, storage_chat_id):
 
     duration, width, height = await get_video_metadata(filepath)
 
     async def progress(current, total):
         try:
             percent = current * 100 / total
-            await message.edit_text(f"📤 Enviando... {percent:.0f}%")
+            if percent < 100:
+                await message.edit_text(f"📤 Enviando... {percent:.0f}%")
         except:
             pass
 
     sent = await userbot.send_video(
-        chat_id=message.chat.id,  # envia primeiro no canal depois copy
+        chat_id=storage_chat_id,  # ENVIA DIRETO PARA O CANAL
         video=filepath,
         duration=duration,
         width=width,
@@ -77,5 +71,7 @@ async def upload_video(userbot, filepath, message):
         supports_streaming=True,
         progress=progress
     )
+
+    await message.edit_text("📤 Upload finalizado.")
 
     return sent.id
