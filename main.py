@@ -88,11 +88,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📥 Adicionado à fila.")
 
 # ==============================
-# WORKER (1 POR VEZ)
+# WORKER (1 DOWNLOAD POR VEZ)
 # ==============================
 
 async def worker(app):
-
     while True:
         update, url = await DOWNLOAD_QUEUE.get()
 
@@ -102,7 +101,6 @@ async def worker(app):
             result = await process_link(url)
 
             if isinstance(result, list):
-
                 for file_path in result:
                     msg = await upload_video(app, file_path)
 
@@ -113,7 +111,6 @@ async def worker(app):
                     )
 
                     os.remove(file_path)
-
             else:
                 msg = await upload_video(app, result)
 
@@ -133,18 +130,18 @@ async def worker(app):
         DOWNLOAD_QUEUE.task_done()
 
 # ==============================
-# START DO BOT (SEM asyncio.run)
+# START CORRETO (SEM JobQueue)
 # ==============================
 
-def main():
+async def post_init(app):
+    asyncio.create_task(worker(app))
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("auth", authorize))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-
-    app.job_queue.run_once(lambda *_: asyncio.create_task(worker(app)), 0)
 
     print("Bot iniciado...")
     app.run_polling()
