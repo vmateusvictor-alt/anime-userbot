@@ -2,7 +2,12 @@ import os
 import time
 import subprocess
 
-STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
+# ACEITA @username OU ID
+storage_value = os.getenv("STORAGE_CHANNEL_ID")
+if storage_value.startswith("@"):
+    STORAGE_CHANNEL_ID = storage_value
+else:
+    STORAGE_CHANNEL_ID = int(storage_value)
 
 
 def get_video_info(video_path):
