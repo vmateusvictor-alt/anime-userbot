@@ -38,10 +38,33 @@ def get_video_info(video_path):
     return width, height, duration
 
 
+def generate_thumbnail(video_path):
+    thumb_path = video_path + ".jpg"
+
+    # pega frame no segundo 3 (evita tela preta inicial)
+    cmd = [
+        "ffmpeg",
+        "-ss", "00:00:03",
+        "-i", video_path,
+        "-vframes", "1",
+        "-q:v", "2",
+        "-y",
+        thumb_path
+    ]
+
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if os.path.exists(thumb_path):
+        return thumb_path
+    return None
+
+
 async def upload_video(userbot, filepath, message):
 
     filename = os.path.basename(filepath)
     width, height, duration = get_video_info(filepath)
+
+    thumb = generate_thumbnail(filepath)
 
     last_percent = 0
     last_time = 0
@@ -69,8 +92,13 @@ async def upload_video(userbot, filepath, message):
         duration=duration,
         width=width,
         height=height,
+        thumb=thumb if thumb else None,
         supports_streaming=True,
         progress=progress
     )
+
+    # remove thumbnail depois do envio
+    if thumb and os.path.exists(thumb):
+        os.remove(thumb)
 
     return sent.id
