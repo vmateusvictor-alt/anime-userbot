@@ -96,14 +96,18 @@ async def download_universal(url, progress_callback=None):
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--merge-output-format", "mp4",
-        "-f", "bestvideo+bestaudio/best",
+        "--force-overwrites",
+        "--no-check-certificate",
+        "--no-warnings",
         "--retries", "5",
         "--fragment-retries", "5",
         "--retry-sleep", "2",
         "--concurrent-fragments", "4",
         "--user-agent", HEADERS["User-Agent"],
         "--add-header", f"Referer:{url}",
+        "--remux-video", "mp4",
+        "--merge-output-format", "mp4",
+        "-f", "bestvideo+bestaudio/best",
         "-o", output_path,
         url
     ]
