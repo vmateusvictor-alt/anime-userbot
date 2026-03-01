@@ -33,7 +33,10 @@ userbot = Client(
     api_id=API_ID,
     api_hash=API_HASH,
     session_string=SESSION_STRING,
-    no_updates=True
+    no_updates=True,
+    workers=10,              # mais paralelismo
+    sleep_threshold=60       # evita flood pequeno
+)
 )
 
 # =====================================================
