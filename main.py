@@ -15,7 +15,13 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-STORAGE_CHANNEL_ID = int(os.getenv("STORAGE_CHANNEL_ID"))
+
+# ACEITA @username OU ID
+storage_value = os.getenv("STORAGE_CHANNEL_ID")
+if storage_value.startswith("@"):
+    STORAGE_CHANNEL_ID = storage_value
+else:
+    STORAGE_CHANNEL_ID = int(storage_value)
 
 DOWNLOAD_DIR = "downloads"
 AUTHORIZED_FILE = "authorized_users.txt"
@@ -48,13 +54,13 @@ userbot = Client(
 )
 
 # =====================================================
-# FILA GLOBAL (1 WORKER)
+# FILA GLOBAL
 # =====================================================
 
 download_queue = asyncio.Queue()
 
 # =====================================================
-# WORKER
+# WORKER (1 POR VEZ)
 # =====================================================
 
 async def worker(app):
@@ -62,7 +68,6 @@ async def worker(app):
     while True:
         task = await download_queue.get()
 
-        task_id = task["id"]
         chat_id = task["chat_id"]
         url = task["url"]
         msg = task["message"]
@@ -95,7 +100,7 @@ async def worker(app):
                 await msg.edit_text("🔎 Detectando fonte...")
                 filepath = await download_universal(url, progress)
 
-            await msg.edit_text("📤 Enviando...")
+            await msg.edit_text("📤 Enviando para o canal...")
 
             message_id = await upload_video(
                 userbot=userbot,
@@ -145,10 +150,7 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("📥 Adicionado à fila...")
 
-    task_id = str(uuid.uuid4())[:8]
-
     task = {
-        "id": task_id,
         "chat_id": update.effective_chat.id,
         "url": url,
         "message": msg
@@ -159,7 +161,6 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     position = download_queue.qsize()
 
     await msg.edit_text(
-        f"📌 ID: {task_id}\n"
         f"📥 Posição na fila: {position}"
     )
 
@@ -189,7 +190,7 @@ def main():
 
     app.add_handler(CommandHandler("an", anime_handler))
 
-    print("🚀 Bot otimizado iniciado...")
+    print("🚀 Bot iniciado...")
     app.run_polling()
 
 if __name__ == "__main__":
