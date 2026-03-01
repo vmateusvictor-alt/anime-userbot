@@ -8,7 +8,7 @@ from telegram.ext import (
     ContextTypes
 )
 from pyrogram import Client
-from downloader import download_mp4, download_m3u8, download_universal
+from downloader import process_link
 from uploader import upload_video
 
 
@@ -17,7 +17,7 @@ from uploader import upload_video
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
+API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
 STORAGE_CHANNEL_RAW = os.getenv("STORAGE_CHANNEL_ID")
@@ -25,7 +25,9 @@ STORAGE_CHANNEL_RAW = os.getenv("STORAGE_CHANNEL_ID")
 if not all([BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, STORAGE_CHANNEL_RAW]):
     raise ValueError("Variáveis de ambiente faltando.")
 
-# aceita @username ou ID numérico
+API_ID = int(API_ID)
+
+# Aceita @username ou ID numérico
 if STORAGE_CHANNEL_RAW.startswith("@"):
     STORAGE_CHANNEL_ID = STORAGE_CHANNEL_RAW
 else:
@@ -36,7 +38,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 # =====================================================
-# USERBOT OTIMIZADO (MTProto)
+# USERBOT MTProto OTIMIZADO
 # =====================================================
 
 userbot = Client(
@@ -58,7 +60,7 @@ download_queue = asyncio.Queue()
 
 
 # =====================================================
-# WORKER PRINCIPAL
+# WORKER
 # =====================================================
 
 async def worker(app):
@@ -87,40 +89,62 @@ async def worker(app):
                     except:
                         pass
 
-            url_lower = url.lower()
+            # 🔥 AGORA USA process_link UNIVERSAL
+            result = await process_link(url, progress)
 
-            # Detectar tipo de link
-            if ".m3u8" in url_lower:
-                filepath = await download_m3u8(url, progress)
+            # ===============================
+            # SE FOR PASTA (LISTA)
+            # ===============================
 
-            elif url_lower.endswith(".mp4") or url_lower.endswith(".mkv"):
-                filepath = await download_mp4(url, progress)
+            if isinstance(result, list):
+
+                for filepath in result:
+
+                    await msg.edit_text("📤 Enviando para o canal...")
+
+                    message_id = await upload_video(
+                        userbot=userbot,
+                        filepath=filepath,
+                        message=msg,
+                        storage_chat_id=STORAGE_CHANNEL_ID
+                    )
+
+                    await app.bot.copy_message(
+                        chat_id=chat_id,
+                        from_chat_id=STORAGE_CHANNEL_ID,
+                        message_id=message_id
+                    )
+
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+
+                await msg.edit_text("✅ Pasta concluída!")
+
+            # ===============================
+            # ARQUIVO ÚNICO
+            # ===============================
 
             else:
-                await msg.edit_text("🔎 Detectando fonte...")
-                filepath = await download_universal(url, progress)
 
-            await msg.edit_text("📤 Enviando para o canal...")
+                await msg.edit_text("📤 Enviando para o canal...")
 
-            message_id = await upload_video(
-                userbot=userbot,
-                filepath=filepath,
-                message=msg,
-                storage_chat_id=STORAGE_CHANNEL_ID
-            )
+                message_id = await upload_video(
+                    userbot=userbot,
+                    filepath=result,
+                    message=msg,
+                    storage_chat_id=STORAGE_CHANNEL_ID
+                )
 
-            # Copiar instantaneamente para o grupo
-            await app.bot.copy_message(
-                chat_id=chat_id,
-                from_chat_id=STORAGE_CHANNEL_ID,
-                message_id=message_id
-            )
+                await app.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=STORAGE_CHANNEL_ID,
+                    message_id=message_id
+                )
 
-            # Remover arquivo após envio
-            if os.path.exists(filepath):
-                os.remove(filepath)
+                if os.path.exists(result):
+                    os.remove(result)
 
-            await msg.edit_text("✅ Concluído!")
+                await msg.edit_text("✅ Concluído!")
 
         except Exception as e:
             await msg.edit_text(f"❌ Erro:\n{e}")
@@ -171,7 +195,7 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================================
-# INICIAR USERBOT + WORKER
+# START SERVICES
 # =====================================================
 
 async def start_services(app):
