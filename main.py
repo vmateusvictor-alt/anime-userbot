@@ -1,44 +1,28 @@
 import os
 import asyncio
+import uuid
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes
+)
 from pyrogram import Client
 from downloader import process_link
 from uploader import upload_video
 
 # =====================================================
-# CONFIG
+# VARIÁVEIS
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-
-storage_value = os.getenv("STORAGE_CHANNEL_ID")
-
-if storage_value.startswith("@"):
-    STORAGE_CHANNEL_ID = storage_value
-else:
-    STORAGE_CHANNEL_ID = int(storage_value)
+STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
 
 DOWNLOAD_DIR = "downloads"
-AUTHORIZED_FILE = "authorized_users.txt"
-
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# =====================================================
-# CARREGAR USUÁRIOS AUTORIZADOS
-# =====================================================
-
-def load_authorized_users():
-    if not os.path.exists(AUTHORIZED_FILE):
-        return set()
-
-    with open(AUTHORIZED_FILE, "r") as f:
-        return set(int(line.strip()) for line in f if line.strip().isdigit())
-
-AUTHORIZED_USERS = load_authorized_users()
 
 # =====================================================
 # USERBOT
@@ -57,6 +41,7 @@ userbot = Client(
 # =====================================================
 
 download_queue = asyncio.Queue()
+active_tasks = {}
 
 # =====================================================
 # WORKER
@@ -67,40 +52,50 @@ async def worker(app):
     while True:
         task = await download_queue.get()
 
+        task_id = task["id"]
         chat_id = task["chat_id"]
         url = task["url"]
         msg = task["message"]
 
+        active_tasks[task_id] = task
+
         try:
             await msg.edit_text("📥 Iniciando download...")
 
-            last_update = 0
+            last_percent = 0
 
             async def progress(percent):
-                nonlocal last_update
-                if percent - last_update >= 15:
-                    last_update = percent
+                nonlocal last_percent
+
+                if percent - last_percent >= 5:
+                    last_percent = percent
+                    bar = "█" * int(percent // 5)
+                    bar = bar.ljust(20, "░")
                     try:
-                        await msg.edit_text(f"📥 Baixando... {percent:.0f}%")
+                        await msg.edit_text(
+                            f"📥 Baixando...\n[{bar}] {percent:.2f}%"
+                        )
                     except:
                         pass
 
+            # 🔥 AGORA USA process_link (SUPORTA TUDO)
             result = await process_link(url, progress)
 
             # ==========================================
-            # SE FOR PASTA (lista de arquivos)
+            # SE FOR PASTA (LISTA DE ARQUIVOS)
             # ==========================================
 
             if isinstance(result, list):
 
                 for filepath in result:
 
-                    await msg.edit_text("📤 Enviando para o canal...")
+                    await msg.edit_text("📤 Enviando para canal...")
 
                     message_id = await upload_video(
                         userbot=userbot,
                         filepath=filepath,
-                        message=msg
+                        message=msg,
+                        storage_chat_id=STORAGE_CHANNEL_ID
                     )
 
                     await app.bot.copy_message(
@@ -120,12 +115,13 @@ async def worker(app):
 
             else:
 
-                await msg.edit_text("📤 Enviando para o canal...")
+                await msg.edit_text("📤 Enviando para canal...")
 
                 message_id = await upload_video(
                     userbot=userbot,
                     filepath=result,
-                    message=msg
+                    message=msg,
+                    storage_chat_id=STORAGE_CHANNEL_ID
                 )
 
                 await app.bot.copy_message(
@@ -143,6 +139,7 @@ async def worker(app):
             await msg.edit_text(f"❌ Erro:\n{e}")
 
         finally:
+            active_tasks.pop(task_id, None)
             download_queue.task_done()
 
 # =====================================================
@@ -152,13 +149,9 @@ async def worker(app):
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_chat.type == "private":
-        await update.message.reply_text("❌ Apenas grupos.")
-        return
-
-    user_id = update.effective_user.id
-
-    if AUTHORIZED_USERS and user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("⛔ Você não está autorizado.")
+        await update.message.reply_text(
+            "❌ Este bot funciona apenas em grupos."
+        )
         return
 
     if not context.args:
@@ -169,7 +162,10 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("📥 Adicionado à fila...")
 
+    task_id = str(uuid.uuid4())[:8]
+
     task = {
+        "id": task_id,
         "chat_id": update.effective_chat.id,
         "url": url,
         "message": msg
@@ -179,13 +175,53 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     position = download_queue.qsize()
 
-    await msg.edit_text(f"📥 Posição na fila: {position}")
+    await msg.edit_text(
+        f"📌 Tarefa ID: {task_id}\n"
+        f"📥 Posição na fila: {position}"
+    )
 
 # =====================================================
-# START
+# CANCELAR
 # =====================================================
 
-async def start_bot(app):
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not context.args:
+        await update.message.reply_text("Use:\n/cancel ID")
+        return
+
+    task_id = context.args[0]
+
+    if task_id in active_tasks:
+        await update.message.reply_text(
+            "⚠️ Não é possível cancelar tarefa em execução."
+        )
+        return
+
+    new_queue = asyncio.Queue()
+    cancelled = False
+
+    while not download_queue.empty():
+        task = await download_queue.get()
+        if task["id"] == task_id:
+            cancelled = True
+            download_queue.task_done()
+            continue
+        await new_queue.put(task)
+        download_queue.task_done()
+
+    download_queue._queue = new_queue._queue
+
+    if cancelled:
+        await update.message.reply_text("✅ Tarefa cancelada.")
+    else:
+        await update.message.reply_text("❌ ID não encontrado.")
+
+# =====================================================
+# START USERBOT
+# =====================================================
+
+async def start_userbot(app):
 
     if not userbot.is_connected:
         await userbot.start()
@@ -201,13 +237,14 @@ def main():
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
-        .post_init(start_bot)
+        .post_init(start_userbot)
         .build()
     )
 
     app.add_handler(CommandHandler("an", anime_handler))
+    app.add_handler(CommandHandler("cancel", cancel_handler))
 
-    print("🚀 Bot iniciado...")
+    print("🚀 Bot iniciado com fila otimizada...")
     app.run_polling()
 
 if __name__ == "__main__":
