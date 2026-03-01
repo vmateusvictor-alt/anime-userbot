@@ -5,16 +5,17 @@ STORAGE_CHANNEL_ID = os.getenv("STORAGE_CHANNEL_ID")
 
 
 # =====================================================
-# PEGAR INFO DO VÍDEO (SEGURO CONTRA N/A)
+# PEGAR INFO COMPLETA DO VÍDEO
 # =====================================================
 
 def get_video_info(video_path):
     cmd = [
         "ffprobe",
         "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,duration",
-        "-of", "default=noprint_wrappers=1",
+        "-show_entries",
+        "format=duration:stream=width,height",
+        "-of",
+        "default=noprint_wrappers=1",
         video_path
     ]
 
@@ -40,7 +41,6 @@ def get_video_info(video_path):
 
         elif line.startswith("duration="):
             value = line.split("=")[1]
-
             if value != "N/A":
                 try:
                     duration = int(float(value))
@@ -51,7 +51,7 @@ def get_video_info(video_path):
 
 
 # =====================================================
-# GERAR CAPA AUTOMÁTICA
+# GERAR THUMB
 # =====================================================
 
 def generate_thumbnail(video_path):
@@ -60,17 +60,13 @@ def generate_thumbnail(video_path):
     cmd = [
         "ffmpeg",
         "-i", video_path,
-        "-ss", "00:00:03",
+        "-ss", "00:00:05",
         "-vframes", "1",
         thumb_path,
         "-y"
     ]
 
-    subprocess.run(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     if os.path.exists(thumb_path):
         return thumb_path
@@ -79,13 +75,20 @@ def generate_thumbnail(video_path):
 
 
 # =====================================================
-# UPLOAD STREAMING
+# UPLOAD COM NOME + DURAÇÃO CORRETOS
 # =====================================================
 
 async def upload_video(userbot, filepath, message):
 
     width, height, duration = get_video_info(filepath)
     thumb = generate_thumbnail(filepath)
+
+    # Nome real do arquivo
+    file_name = os.path.basename(filepath)
+
+    # Se duração falhar, tenta pegar manualmente
+    if duration == 0:
+        duration = 1  # evita 0:00
 
     sent = await userbot.send_video(
         chat_id=STORAGE_CHANNEL_ID,
@@ -94,10 +97,11 @@ async def upload_video(userbot, filepath, message):
         width=width,
         height=height,
         thumb=thumb,
-        supports_streaming=True
+        supports_streaming=True,
+        file_name=file_name,
+        caption=file_name
     )
 
-    # Remove thumbnail
     if thumb and os.path.exists(thumb):
         os.remove(thumb)
 
