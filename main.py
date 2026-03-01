@@ -71,7 +71,6 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ======================
 
 async def worker(app):
-
     while True:
         update, url = await DOWNLOAD_QUEUE.get()
 
@@ -111,7 +110,7 @@ async def worker(app):
 
 
 # ======================
-# MAIN SIMPLES
+# INICIALIZAÇÃO CORRETA
 # ======================
 
 async def main():
@@ -121,11 +120,17 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
+    # Inicia worker após inicializar
+    await app.initialize()
+    await app.start()
+
     asyncio.create_task(worker(app))
 
     print("Bot iniciado...")
-    await app.run_polling()
+    await app.updater.start_polling()
+
+    await app.updater.idle()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.get_event_loop().run_until_complete(main())
