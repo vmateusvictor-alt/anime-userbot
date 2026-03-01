@@ -79,6 +79,8 @@ async def generate_thumbnail(filepath):
 # UPLOAD COMPLETO COM INFO
 # =====================================================
 
+import os
+
 async def upload_video(userbot, filepath, message, storage_chat_id):
 
     await message.edit_text("📤 Preparando vídeo...")
@@ -88,28 +90,12 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
 
     file_name = os.path.basename(filepath)
 
-    start_time = time.time()
-    last_update = 0
+    # 🔥 Remove duplicação .mp4.mp4
+    if file_name.endswith(".mp4.mp4"):
+        file_name = file_name.replace(".mp4.mp4", ".mp4")
 
-    async def progress(current, total):
-        nonlocal last_update
-
-        now = time.time()
-
-        if now - last_update > 4:
-            last_update = now
-            percent = current * 100 / total
-            speed = current / (now - start_time) / 1024 / 1024
-
-            try:
-                await message.edit_text(
-                    f"📤 Enviando...\n"
-                    f"{file_name}\n"
-                    f"{percent:.1f}%\n"
-                    f"⚡ {speed:.2f} MB/s"
-                )
-            except:
-                pass
+    # 🔥 Remove extensão da legenda (opcional)
+    caption_name = file_name.rsplit(".", 1)[0]
 
     sent = await userbot.send_video(
         chat_id=storage_chat_id,
@@ -119,11 +105,9 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
         height=height,
         thumb=thumb,
         file_name=file_name,
-        supports_streaming=True,
-        progress=progress
+        caption=f"🎬 {caption_name}",
+        supports_streaming=True
     )
-
-    await message.edit_text("✅ Upload concluído!")
 
     if thumb and os.path.exists(thumb):
         os.remove(thumb)
