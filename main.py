@@ -13,21 +13,18 @@ from telegram.ext import (
 from downloader import process_link
 from uploader import upload_video
 
-# ==============================
-# CONFIG
-# ==============================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-STORAGE_CHANNEL = os.getenv("STORAGE_CHANNEL")  # Ex: @bca123ssildo
+STORAGE_CHANNEL = os.getenv("STORAGE_CHANNEL")
 AUTHORIZED_FILE = "authorized_users.txt"
 
 DOWNLOAD_QUEUE = asyncio.Queue()
 
 logging.basicConfig(level=logging.INFO)
 
-# ==============================
-# USUÁRIOS AUTORIZADOS
-# ==============================
+
+# ======================
+# AUTORIZAÇÃO
+# ======================
 
 def load_authorized_users():
     if not os.path.exists(AUTHORIZED_FILE):
@@ -35,42 +32,23 @@ def load_authorized_users():
     with open(AUTHORIZED_FILE, "r") as f:
         return set(line.strip() for line in f.readlines())
 
-def save_authorized_user(user_id):
-    with open(AUTHORIZED_FILE, "a") as f:
-        f.write(f"{user_id}\n")
-
 AUTHORIZED_USERS = load_authorized_users()
 
 def is_authorized(user_id):
     return str(user_id) in AUTHORIZED_USERS
 
-# ==============================
+
+# ======================
 # COMANDOS
-# ==============================
+# ======================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Bot online.")
-
-async def authorize(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.reply_to_message:
-        await update.message.reply_text("Responda a mensagem do usuário para autorizar.")
-        return
-
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("❌ Você não pode autorizar.")
-        return
-
-    user_id = update.message.reply_to_message.from_user.id
-    save_authorized_user(user_id)
-    AUTHORIZED_USERS.add(str(user_id))
-
-    await update.message.reply_text("✅ Usuário autorizado.")
+    await update.message.reply_text("🤖 Bot funcionando.")
 
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
 
-    if not is_authorized(user_id):
-        await update.message.reply_text("❌ Você não está autorizado.")
+    if not is_authorized(update.effective_user.id):
+        await update.message.reply_text("❌ Não autorizado.")
         return
 
     text = update.message.text.strip()
@@ -81,17 +59,19 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         url = text.split(" ", 1)[1]
     except:
-        await update.message.reply_text("⚠ Use: /an link")
+        await update.message.reply_text("Use: /an link")
         return
 
     await DOWNLOAD_QUEUE.put((update, url))
     await update.message.reply_text("📥 Adicionado à fila.")
 
-# ==============================
-# WORKER (1 DOWNLOAD POR VEZ)
-# ==============================
+
+# ======================
+# WORKER
+# ======================
 
 async def worker(app):
+
     while True:
         update, url = await DOWNLOAD_QUEUE.get()
 
@@ -125,26 +105,27 @@ async def worker(app):
             await update.message.reply_text("✅ Concluído.")
 
         except Exception as e:
-            await update.message.reply_text(f"❌ Erro: {e}")
+            await update.message.reply_text(f"Erro: {e}")
 
         DOWNLOAD_QUEUE.task_done()
 
-# ==============================
-# START CORRETO (SEM JobQueue)
-# ==============================
 
-async def post_init(app):
-    asyncio.create_task(worker(app))
+# ======================
+# MAIN SIMPLES
+# ======================
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
+async def main():
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("auth", authorize))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
 
+    asyncio.create_task(worker(app))
+
     print("Bot iniciado...")
-    app.run_polling()
+    await app.run_polling()
+
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
