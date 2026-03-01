@@ -13,6 +13,31 @@ from uploader import upload_video
 
 
 # =====================================================
+# USUÁRIOS AUTORIZADOS (LENDO DO ARQUIVO)
+# =====================================================
+
+AUTHORIZED_USERS = set()
+
+def load_authorized_users():
+    try:
+        with open("authorized_users.txt", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.isdigit():
+                    AUTHORIZED_USERS.add(int(line))
+        print(f"✅ {len(AUTHORIZED_USERS)} usuários autorizados carregados.")
+    except FileNotFoundError:
+        print("⚠ authorized_users.txt não encontrado.")
+
+
+def is_authorized(update: Update):
+    user = update.effective_user
+    if not user:
+        return False
+    return user.id in AUTHORIZED_USERS
+
+
+# =====================================================
 # VARIÁVEIS DE AMBIENTE
 # =====================================================
 
@@ -27,7 +52,6 @@ if not all([BOT_TOKEN, API_ID, API_HASH, SESSION_STRING, STORAGE_CHANNEL_RAW]):
 
 API_ID = int(API_ID)
 
-# Aceita @username ou ID numérico
 if STORAGE_CHANNEL_RAW.startswith("@"):
     STORAGE_CHANNEL_ID = STORAGE_CHANNEL_RAW
 else:
@@ -89,12 +113,7 @@ async def worker(app):
                     except:
                         pass
 
-            # 🔥 AGORA USA process_link UNIVERSAL
             result = await process_link(url, progress)
-
-            # ===============================
-            # SE FOR PASTA (LISTA)
-            # ===============================
 
             if isinstance(result, list):
 
@@ -119,10 +138,6 @@ async def worker(app):
                         os.remove(filepath)
 
                 await msg.edit_text("✅ Pasta concluída!")
-
-            # ===============================
-            # ARQUIVO ÚNICO
-            # ===============================
 
             else:
 
@@ -158,6 +173,10 @@ async def worker(app):
 # =====================================================
 
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not is_authorized(update):
+        await update.message.reply_text("❌ Você não está autorizado a usar este bot.")
+        return
 
     if update.effective_chat.type == "private":
         await update.message.reply_text(
@@ -212,6 +231,8 @@ async def start_services(app):
 # =====================================================
 
 def main():
+
+    load_authorized_users()
 
     app = (
         ApplicationBuilder()
