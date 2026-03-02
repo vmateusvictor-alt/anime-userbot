@@ -154,68 +154,68 @@ async def detect_folder_links(url):
 
 async def process_link(url, progress_callback=None):
 
-    # 🔥 1. Detecta pasta
+    # ==========================================
+    # 1️⃣ FORÇA yt-dlp PARA LINKS download.aspx
+    # ==========================================
+
+    if "download.aspx" in url or "workers.dev" in url:
+
+        cmd = [
+            "yt-dlp",
+            "-o", os.path.join(DOWNLOAD_DIR, "%(title)s.%(ext)s"),
+            "--add-header", "User-Agent: Mozilla/5.0",
+            "--add-header", f"Referer: {url}",
+            url
+        ]
+
+        process = await asyncio.create_subprocess_exec(*cmd)
+        await process.wait()
+
+        if process.returncode != 0:
+            raise Exception("Erro ao baixar link protegido.")
+
+        files = sorted(
+            [os.path.join(DOWNLOAD_DIR, f) for f in os.listdir(DOWNLOAD_DIR)],
+            key=os.path.getctime
+        )
+
+        return files[-1]
+
+    # ==========================================
+    # 2️⃣ DETECTA PASTA
+    # ==========================================
+
     folder_links = await detect_folder_links(url)
     if folder_links:
 
         results = []
 
-        for index, link in enumerate(folder_links, start=1):
-            print(f"📂 Baixando arquivo {index}/{len(folder_links)}")
-
-            result = await download_direct(link, progress_callback)
+        for link in folder_links:
+            result = await process_link(link, progress_callback)
             results.append(result)
 
         return results
 
-    # 🔥 2. M3U8
+    # ==========================================
+    # 3️⃣ M3U8
+    # ==========================================
+
     if ".m3u8" in url.lower():
         return await download_m3u8(url)
 
-    # 🔥 3. Download direto
+    # ==========================================
+    # 4️⃣ DOWNLOAD DIRETO NORMAL
+    # ==========================================
+
     try:
         return await download_direct(url, progress_callback)
     except Exception:
         pass
 
-    # 🔥 4. yt-dlp playlist
-    try:
-        cmd = ["yt-dlp", "-J", "--flat-playlist", url]
+    # ==========================================
+    # 5️⃣ FALLBACK yt-dlp NORMAL
+    # ==========================================
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-
-        stdout, _ = await process.communicate()
-
-        if process.returncode == 0 and stdout:
-            data = json.loads(stdout.decode())
-            entries = data.get("entries")
-
-            if entries:
-                video_urls = []
-
-                for entry in entries:
-                    entry_url = entry.get("url")
-                    if entry_url:
-                        video_urls.append(entry_url)
-
-                if video_urls:
-                    video_urls.sort(key=natural_sort_key)
-
-                    results = []
-                    for link in video_urls:
-                        result = await download_direct(link, progress_callback)
-                        results.append(result)
-
-                    return results
-
-    except Exception:
-        pass
-
-    # 🔥 5. Fallback yt-dlp normal
     cmd = [
         "yt-dlp",
         "--no-playlist",
