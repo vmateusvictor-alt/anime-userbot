@@ -1,23 +1,25 @@
 import os
-import asyncio
-import aiohttp
 import re
 import uuid
+import asyncio
+import aiohttp
 
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = 4 * 1024 * 1024
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".m3u8")
+CHUNK_SIZE = 8 * 1024 * 1024
+
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".webm", ".m3u8")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*"
+    "Accept": "*/*",
+    "Connection": "keep-alive"
 }
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 # =====================================================
-# ORDENAÇÃO NATURAL (ep1, ep2, ep10 correto)
+# ORDENAÇÃO NATURAL
 # =====================================================
 
 def natural_sort_key(s):
@@ -28,48 +30,7 @@ def natural_sort_key(s):
 
 
 # =====================================================
-# EXTRAIR VÍDEOS DE PASTA HTML
-# =====================================================
-
-async def extract_all_videos_from_folder(url):
-
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise Exception("Não foi possível acessar a pasta.")
-
-            html = await resp.text()
-
-    links = re.findall(r'href="([^"]+)"', html)
-    video_links = []
-
-    for link in links:
-
-        # 🔥 Ignora navegação
-        if link.startswith("?") or link.startswith("#"):
-            continue
-
-        if any(link.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
-
-            if not link.startswith("http"):
-                if url.endswith("/"):
-                    link = url + link
-                else:
-                    link = url + "/" + link
-
-            video_links.append(link)
-
-    if not video_links:
-        raise Exception("Nenhum vídeo encontrado na pasta.")
-
-    # 🔥 ORDEM CORRETA
-    video_links.sort(key=natural_sort_key)
-
-    return video_links
-
-
-# =====================================================
-# DOWNLOAD DIRETO (MP4 / MKV)
+# DOWNLOAD DIRETO (ANTI HTML)
 # =====================================================
 
 async def download_direct(url, progress_callback=None):
@@ -82,11 +43,16 @@ async def download_direct(url, progress_callback=None):
             if resp.status != 200:
                 raise Exception(f"Erro HTTP {resp.status}")
 
-            filename = None
-            content_disposition = resp.headers.get("Content-Disposition")
+            content_type = resp.headers.get("Content-Type", "").lower()
 
-            if content_disposition:
-                match = re.findall('filename="?([^"]+)"?', content_disposition)
+            if "text/html" in content_type:
+                raise Exception("Resposta HTML detectada.")
+
+            filename = None
+            cd = resp.headers.get("Content-Disposition")
+
+            if cd:
+                match = re.findall('filename="?([^"]+)"?', cd)
                 if match:
                     filename = match[0]
 
@@ -109,24 +75,29 @@ async def download_direct(url, progress_callback=None):
 
                     if total and progress_callback:
                         percent = (downloaded / total) * 100
-                        if percent - last_percent >= 10:
+                        if percent - last_percent >= 5:
                             last_percent = percent
                             await progress_callback(percent)
+
+    if os.path.getsize(output_path) < 500_000:
+        os.remove(output_path)
+        raise Exception("Arquivo inválido ou bloqueado.")
 
     return output_path
 
 
 # =====================================================
-# DOWNLOAD M3U8 (FFMPEG)
+# DOWNLOAD M3U8
 # =====================================================
 
-async def download_m3u8(url, progress_callback=None):
+async def download_m3u8(url):
 
     filename = str(uuid.uuid4()) + ".mp4"
     output_path = os.path.join(DOWNLOAD_DIR, filename)
 
     cmd = [
         "ffmpeg",
+        "-loglevel", "error",
         "-i", url,
         "-c", "copy",
         "-bsf:a", "aac_adtstoasc",
@@ -144,7 +115,39 @@ async def download_m3u8(url, progress_callback=None):
 
 
 # =====================================================
-# FALLBACK UNIVERSAL (YT-DLP)
+# EXTRAIR LINKS DE PASTA HTML
+# =====================================================
+
+async def extract_folder_links(url):
+
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
+        async with session.get(url) as resp:
+
+            if resp.status != 200:
+                return None
+
+            html = await resp.text()
+
+    links = re.findall(r'href="([^"]+)"', html)
+    videos = []
+
+    for link in links:
+        if link.lower().endswith(VIDEO_EXTENSIONS):
+
+            if not link.startswith("http"):
+                link = url.rstrip("/") + "/" + link.lstrip("/")
+
+            videos.append(link)
+
+    if videos:
+        videos.sort(key=natural_sort_key)
+        return videos
+
+    return None
+
+
+# =====================================================
+# DOWNLOAD VIA YT-DLP (UNIVERSAL)
 # =====================================================
 
 async def download_with_ytdlp(url):
@@ -153,7 +156,11 @@ async def download_with_ytdlp(url):
 
     cmd = [
         "yt-dlp",
+        "-f", "best",
         "--no-playlist",
+        "--user-agent", "Mozilla/5.0",
+        "--sleep-interval", "2",
+        "--retries", "10",
         "-o", output_template,
         url
     ]
@@ -162,7 +169,7 @@ async def download_with_ytdlp(url):
     await process.wait()
 
     if process.returncode != 0:
-        raise Exception("Erro ao baixar com yt-dlp.")
+        raise Exception("Erro ao extrair vídeo da página.")
 
     files = sorted(
         [os.path.join(DOWNLOAD_DIR, f) for f in os.listdir(DOWNLOAD_DIR)],
@@ -180,54 +187,38 @@ async def process_link(url, progress_callback=None):
 
     url_lower = url.lower()
 
-    # EXTENSÃO DIRETA
+    # 1️⃣ M3U8 direto
     if url_lower.endswith(".m3u8"):
-        return await download_m3u8(url, progress_callback)
+        return await download_m3u8(url)
 
-    if url_lower.endswith((".mp4", ".mkv")):
+    # 2️⃣ Arquivo direto
+    if url_lower.endswith((".mp4", ".mkv", ".webm")):
         return await download_direct(url, progress_callback)
 
-    # TESTAR HEAD
+    # 3️⃣ Detectar pasta
+    folder_links = await extract_folder_links(url)
+    if folder_links:
+
+        results = []
+
+        for link in folder_links:
+            result = await process_link(link, progress_callback)
+            results.append(result)
+
+        return results
+
+    # 4️⃣ Tentar download direto via HEAD
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.head(url, allow_redirects=True) as resp:
 
                 content_type = resp.headers.get("content-type", "")
-                content_disp = resp.headers.get("content-disposition", "")
 
-                if (
-                    "video" in content_type
-                    or "octet-stream" in content_type
-                    or "attachment" in content_disp
-                ):
+                if "video" in content_type or "octet-stream" in content_type:
                     return await download_direct(url, progress_callback)
 
     except:
         pass
 
-    # 🔥 SE FOR HTML → SEMPRE TENTAR COMO PASTA
-    try:
-        async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(url) as resp:
-
-                content_type = resp.headers.get("content-type", "")
-
-                if "text/html" in content_type:
-
-                    video_links = await extract_all_videos_from_folder(url)
-
-                    if video_links:
-                        results = []
-
-                        # 🔥 BAIXA UM POR VEZ EM ORDEM
-                        for video_url in video_links:
-                            result = await process_link(video_url, progress_callback)
-                            results.append(result)
-
-                        return results
-
-    except:
-        pass
-
-    # FALLBACK (somente se realmente não for pasta)
+    # 5️⃣ Fallback universal (sites tipo anroll, drive, workers)
     return await download_with_ytdlp(url)
