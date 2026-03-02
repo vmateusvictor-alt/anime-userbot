@@ -35,11 +35,25 @@ async def extract_all_videos_from_folder(url):
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
 
-        # 🔥 TENTA MÉTODO MODERNO (API JSON)
+        # ================================
+        # 🔥 TENTA DRIVE INDEX (API JSON)
+        # ================================
         try:
-            api_url = url.rstrip("/") + "/api"
+            from urllib.parse import urlparse, unquote
 
-            async with session.post(api_url, json={}) as resp:
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            path = unquote(parsed.path)
+
+            api_url = base_url + "/api"
+
+            payload = {
+                "path": path,
+                "password": ""
+            }
+
+            async with session.post(api_url, json=payload) as resp:
+
                 if resp.status == 200:
                     data = await resp.json()
 
@@ -50,15 +64,18 @@ async def extract_all_videos_from_folder(url):
                     for file in files:
                         name = file.get("name", "")
                         if any(name.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
-                            video_links.append(url.rstrip("/") + "/" + name)
+                            video_links.append(base_url + path.rstrip("/") + "/" + name)
 
                     if video_links:
                         video_links.sort(key=natural_sort_key)
                         return video_links
-        except:
+
+        except Exception:
             pass
 
+        # ================================
         # 🔥 FALLBACK HTML SIMPLES
+        # ================================
         async with session.get(url) as resp:
             if resp.status != 200:
                 raise Exception("Não foi possível acessar a pasta.")
