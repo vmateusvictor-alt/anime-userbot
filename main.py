@@ -66,7 +66,7 @@ userbot = Client(
     api_hash=API_HASH,
     session_string=SESSION_STRING,
     no_updates=True,
-    workers=1  # 🔥 apenas 1 worker MTProto
+    workers=1
 )
 
 
@@ -79,7 +79,7 @@ processing_lock = asyncio.Lock()
 
 
 # =====================================================
-# WORKER (NUNCA PARALELO)
+# WORKER (1 POR VEZ + SUPORTE A TÓPICOS)
 # =====================================================
 
 async def worker(app):
@@ -87,12 +87,13 @@ async def worker(app):
     while True:
         task = await download_queue.get()
 
-        async with processing_lock:  # 🔥 garante 1 por vez
+        async with processing_lock:
 
             task_id = task["id"]
             chat_id = task["chat_id"]
             url = task["url"]
             msg = task["message"]
+            topic_id = task.get("topic_id")  # 🔥 tópico
 
             try:
                 await msg.edit_text("📥 Iniciando download...")
@@ -132,7 +133,8 @@ async def worker(app):
                         await app.bot.copy_message(
                             chat_id=chat_id,
                             from_chat_id=STORAGE_CHANNEL_ID,
-                            message_id=message_id
+                            message_id=message_id,
+                            message_thread_id=topic_id  # 🔥 envia no tópico correto
                         )
 
                         if os.path.exists(filepath):
@@ -158,7 +160,8 @@ async def worker(app):
                     await app.bot.copy_message(
                         chat_id=chat_id,
                         from_chat_id=STORAGE_CHANNEL_ID,
-                        message_id=message_id
+                        message_id=message_id,
+                        message_thread_id=topic_id  # 🔥 envia no tópico correto
                     )
 
                     if os.path.exists(result):
@@ -173,7 +176,7 @@ async def worker(app):
 
 
 # =====================================================
-# COMANDO /an
+# COMANDO /an (COM SUPORTE A TÓPICOS)
 # =====================================================
 
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -192,7 +195,12 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = context.args[0]
 
-    msg = await update.message.reply_text("📥 Adicionado à fila...")
+    topic_id = update.message.message_thread_id  # 🔥 pega o tópico
+
+    msg = await update.message.reply_text(
+        "📥 Adicionado à fila...",
+        message_thread_id=topic_id  # 🔥 responde no mesmo tópico
+    )
 
     task_id = str(uuid.uuid4())[:8]
 
@@ -200,7 +208,8 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "id": task_id,
         "chat_id": update.effective_chat.id,
         "url": url,
-        "message": msg
+        "message": msg,
+        "topic_id": topic_id  # 🔥 salva tópico
     }
 
     await download_queue.put(task)
@@ -244,7 +253,10 @@ def main():
     app.add_handler(CommandHandler("an", anime_handler))
 
     print("🚀 Bot iniciado...")
-    app.run_polling()
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False
+    )
 
 
 if __name__ == "__main__":
