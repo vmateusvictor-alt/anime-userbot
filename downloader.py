@@ -16,6 +16,17 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 # =====================================================
+# ORDENAÇÃO NATURAL (ep1, ep2, ep10 correto)
+# =====================================================
+
+def natural_sort_key(s):
+    return [
+        int(text) if text.isdigit() else text.lower()
+        for text in re.split(r'([0-9]+)', s)
+    ]
+
+
+# =====================================================
 # EXTRAIR VÍDEOS DE PASTA HTML
 # =====================================================
 
@@ -45,12 +56,14 @@ async def extract_all_videos_from_folder(url):
     if not video_links:
         raise Exception("Nenhum vídeo encontrado na pasta.")
 
-    video_links.sort()
+    # 🔥 ORDEM CORRETA
+    video_links.sort(key=natural_sort_key)
+
     return video_links
 
 
 # =====================================================
-# DOWNLOAD DIRETO (BINÁRIO / MP4 / MKV)
+# DOWNLOAD DIRETO (MP4 / MKV)
 # =====================================================
 
 async def download_direct(url, progress_callback=None):
@@ -63,7 +76,7 @@ async def download_direct(url, progress_callback=None):
             if resp.status != 200:
                 raise Exception(f"Erro HTTP {resp.status}")
 
-            # 🔥 PEGAR NOME REAL DO HEADER
+            # Tenta pegar nome do header
             filename = None
             content_disposition = resp.headers.get("Content-Disposition")
 
@@ -72,11 +85,11 @@ async def download_direct(url, progress_callback=None):
                 if match:
                     filename = match[0]
 
-            # Se não tiver no header, tenta pegar da URL
+            # Se não tiver no header, pega da URL
             if not filename:
                 filename = os.path.basename(url.split("?")[0])
 
-            # Se ainda for nome inválido
+            # Se ainda inválido
             if not filename or "." not in filename:
                 filename = str(uuid.uuid4()) + ".mp4"
 
@@ -164,20 +177,14 @@ async def process_link(url, progress_callback=None):
 
     url_lower = url.lower()
 
-    # ==========================================
     # EXTENSÃO DIRETA
-    # ==========================================
-
     if url_lower.endswith(".m3u8"):
         return await download_m3u8(url, progress_callback)
 
     if url_lower.endswith((".mp4", ".mkv")):
         return await download_direct(url, progress_callback)
 
-    # ==========================================
-    # TESTAR SE É ARQUIVO DIRETO (HEAD)
-    # ==========================================
-
+    # TESTAR HEAD
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.head(url, allow_redirects=True) as resp:
@@ -195,10 +202,7 @@ async def process_link(url, progress_callback=None):
     except:
         pass
 
-    # ==========================================
     # TESTAR SE É PASTA HTML
-    # ==========================================
-
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.get(url) as resp:
@@ -215,6 +219,7 @@ async def process_link(url, progress_callback=None):
 
                         results = []
 
+                        # 🔥 BAIXA UM POR VEZ EM ORDEM
                         for video_url in video_links:
                             result = await process_link(video_url, progress_callback)
                             results.append(result)
@@ -224,8 +229,5 @@ async def process_link(url, progress_callback=None):
     except:
         pass
 
-    # ==========================================
-    # FALLBACK UNIVERSAL
-    # ==========================================
-
+    # FALLBACK
     return await download_with_ytdlp(url)
