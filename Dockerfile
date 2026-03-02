@@ -1,19 +1,10 @@
 FROM python:3.11-slim
 
-Instalar ffmpeg e dependências
-
-RUN apt-get update && apt-get install -y \
-ffmpeg \
-gcc \
-libffi-dev \
-&& rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y ffmpeg
 
 WORKDIR /app
-
-COPY requirements.txt .
+COPY . .
 
 RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
 
 CMD ["python", "main.py"]
