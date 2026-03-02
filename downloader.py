@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = 4 * 1024 * 1024
+CHUNK_SIZE = 8 * 1024 * 1024  # 🔥 mais rápido
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -31,7 +31,7 @@ def natural_sort_key(s):
 
 
 # =========================================================
-# DOWNLOAD DIRETO (anti HTML / anti bloqueio)
+# DOWNLOAD DIRETO OTIMIZADO + PROGRESSO REAL
 # =========================================================
 
 async def download_direct(url, progress_callback=None):
@@ -46,13 +46,11 @@ async def download_direct(url, progress_callback=None):
 
             content_type = resp.headers.get("Content-Type", "").lower()
 
-            # 🚨 bloqueia HTML
             if "text/html" in content_type:
                 raise Exception("Servidor retornou HTML.")
 
             filename = None
 
-            # tenta pegar nome do header
             cd = resp.headers.get("Content-Disposition")
             if cd:
                 match = re.search('filename="?(.+?)"?$', cd)
@@ -76,13 +74,12 @@ async def download_direct(url, progress_callback=None):
                     f.write(chunk)
                     downloaded += len(chunk)
 
-                    if total and progress_callback:
+                    if total > 0 and progress_callback:
                         percent = (downloaded / total) * 100
-                        if percent - last_percent >= 10:
+                        if percent - last_percent >= 2:  # 🔥 atualiza mais suave
                             last_percent = percent
                             await progress_callback(percent)
 
-    # 🚨 evita arquivo falso pequeno
     if os.path.getsize(output_path) < 500_000:
         os.remove(output_path)
         raise Exception("Arquivo inválido ou bloqueado.")
@@ -101,6 +98,7 @@ async def download_m3u8(url):
 
     cmd = [
         "ffmpeg",
+        "-loglevel", "error",
         "-i", url,
         "-c", "copy",
         "-bsf:a", "aac_adtstoasc",
@@ -118,7 +116,7 @@ async def download_m3u8(url):
 
 
 # =========================================================
-# DETECTA LINKS DE PASTA (index)
+# DETECTA LINKS DE PASTA
 # =========================================================
 
 async def detect_folder_links(url):
@@ -156,29 +154,31 @@ async def detect_folder_links(url):
 
 async def process_link(url, progress_callback=None):
 
-    # 1️⃣ tenta detectar pasta primeiro
+    # 🔥 1. Detecta pasta
     folder_links = await detect_folder_links(url)
     if folder_links:
 
         results = []
 
-        for link in folder_links:
-            result = await process_link(link, progress_callback)
+        for index, link in enumerate(folder_links, start=1):
+            print(f"📂 Baixando arquivo {index}/{len(folder_links)}")
+
+            result = await download_direct(link, progress_callback)
             results.append(result)
 
         return results
 
-    # 2️⃣ se for m3u8
+    # 🔥 2. M3U8
     if ".m3u8" in url.lower():
         return await download_m3u8(url)
 
-    # 3️⃣ tenta download direto
+    # 🔥 3. Download direto
     try:
         return await download_direct(url, progress_callback)
     except Exception:
         pass
 
-    # 4️⃣ tenta playlist via yt-dlp
+    # 🔥 4. yt-dlp playlist
     try:
         cmd = ["yt-dlp", "-J", "--flat-playlist", url]
 
@@ -206,8 +206,8 @@ async def process_link(url, progress_callback=None):
                     video_urls.sort(key=natural_sort_key)
 
                     results = []
-                    for video_url in video_urls:
-                        result = await process_link(video_url, progress_callback)
+                    for link in video_urls:
+                        result = await download_direct(link, progress_callback)
                         results.append(result)
 
                     return results
@@ -215,7 +215,7 @@ async def process_link(url, progress_callback=None):
     except Exception:
         pass
 
-    # 5️⃣ fallback yt-dlp normal
+    # 🔥 5. Fallback yt-dlp normal
     cmd = [
         "yt-dlp",
         "--no-playlist",
