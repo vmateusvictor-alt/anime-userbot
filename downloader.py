@@ -31,47 +31,85 @@ def natural_sort_key(s):
 # EXTRAIR VÍDEOS DE PASTA HTML
 # =====================================================
 
-async def extract_all_videos_from_folder(url):
+async def process_link(url, progress_callback=None):
 
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
+    url_lower = url.lower()
 
-        # ================================
-        # 🔥 TENTA DRIVE INDEX (API JSON)
-        # ================================
-        try:
-            from urllib.parse import urlparse, unquote
+    # ============================
+    # 1️⃣ EXTENSÃO DIRETA
+    # ============================
 
-            parsed = urlparse(url)
-            base_url = f"{parsed.scheme}://{parsed.netloc}"
-            path = unquote(parsed.path)
+    if url_lower.endswith(".m3u8"):
+        return await download_m3u8(url, progress_callback)
 
-            api_url = base_url + "/api"
+    if url_lower.endswith((".mp4", ".mkv")):
+        return await download_direct(url, progress_callback)
 
-            payload = {
-                "path": path,
-                "password": ""
-            }
+    # ============================
+    # 2️⃣ TENTAR LISTAR COM YT-DLP
+    # ============================
 
-            async with session.post(api_url, json=payload) as resp:
+    try:
+        import json
 
-                if resp.status == 200:
-                    data = await resp.json()
+        cmd = [
+            "yt-dlp",
+            "-J",  # JSON only
+            "--flat-playlist",
+            url
+        ]
 
-                    files = data.get("data", {}).get("files", [])
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
 
-                    video_links = []
+        stdout, stderr = await process.communicate()
 
-                    for file in files:
-                        name = file.get("name", "")
-                        if any(name.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
-                            video_links.append(base_url + path.rstrip("/") + "/" + name)
+        if process.returncode == 0 and stdout:
 
-                    if video_links:
-                        video_links.sort(key=natural_sort_key)
-                        return video_links
+            data = json.loads(stdout.decode())
 
-        except Exception:
-            pass
+            entries = data.get("entries")
+
+            if entries:
+
+                video_urls = []
+
+                for entry in entries:
+                    entry_url = entry.get("url")
+                    if entry_url:
+                        video_urls.append(entry_url)
+
+                if video_urls:
+                    video_urls.sort(key=natural_sort_key)
+
+                    results = []
+
+                    for video_url in video_urls:
+                        result = await process_link(video_url, progress_callback)
+                        results.append(result)
+
+                    return results
+
+    except Exception:
+        pass
+
+    # ============================
+    # 3️⃣ TENTAR DOWNLOAD DIRETO
+    # ============================
+
+    try:
+        return await download_direct(url, progress_callback)
+    except:
+        pass
+
+    # ============================
+    # 4️⃣ FALLBACK YT-DLP NORMAL
+    # ============================
+
+    return await download_with_ytdlp(url)
 
         # ================================
         # 🔥 FALLBACK HTML SIMPLES
