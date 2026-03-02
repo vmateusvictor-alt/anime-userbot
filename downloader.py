@@ -34,39 +34,54 @@ def natural_sort_key(s):
 async def extract_all_videos_from_folder(url):
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
+
+        # 🔥 TENTA MÉTODO MODERNO (API JSON)
+        try:
+            api_url = url.rstrip("/") + "/api"
+
+            async with session.post(api_url, json={}) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+
+                    files = data.get("data", {}).get("files", [])
+
+                    video_links = []
+
+                    for file in files:
+                        name = file.get("name", "")
+                        if any(name.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
+                            video_links.append(url.rstrip("/") + "/" + name)
+
+                    if video_links:
+                        video_links.sort(key=natural_sort_key)
+                        return video_links
+        except:
+            pass
+
+        # 🔥 FALLBACK HTML SIMPLES
         async with session.get(url) as resp:
             if resp.status != 200:
                 raise Exception("Não foi possível acessar a pasta.")
 
             html = await resp.text()
 
-    links = re.findall(r'href="([^"]+)"', html)
-    video_links = []
+        links = re.findall(r'href="([^"]+)"', html)
+        video_links = []
 
-    for link in links:
+        for link in links:
+            if any(link.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
 
-        # 🔥 Ignora navegação
-        if link.startswith("?") or link.startswith("#"):
-            continue
+                if not link.startswith("http"):
+                    link = url.rstrip("/") + "/" + link.lstrip("/")
 
-        if any(link.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
+                video_links.append(link)
 
-            if not link.startswith("http"):
-                if url.endswith("/"):
-                    link = url + link
-                else:
-                    link = url + "/" + link
+        if not video_links:
+            raise Exception("Nenhum vídeo encontrado na pasta.")
 
-            video_links.append(link)
+        video_links.sort(key=natural_sort_key)
 
-    if not video_links:
-        raise Exception("Nenhum vídeo encontrado na pasta.")
-
-    # 🔥 ORDEM CORRETA
-    video_links.sort(key=natural_sort_key)
-
-    return video_links
-
+        return video_links
 
 # =====================================================
 # DOWNLOAD DIRETO (MP4 / MKV)
