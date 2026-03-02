@@ -9,7 +9,8 @@ CHUNK_SIZE = 4 * 1024 * 1024
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".m3u8")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*"
 }
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
@@ -43,7 +44,12 @@ async def extract_all_videos_from_folder(url):
     video_links = []
 
     for link in links:
-        if link.lower().endswith(VIDEO_EXTENSIONS):
+
+        # 🔥 Ignora navegação
+        if link.startswith("?") or link.startswith("#"):
+            continue
+
+        if any(link.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
 
             if not link.startswith("http"):
                 if url.endswith("/"):
@@ -76,7 +82,6 @@ async def download_direct(url, progress_callback=None):
             if resp.status != 200:
                 raise Exception(f"Erro HTTP {resp.status}")
 
-            # Tenta pegar nome do header
             filename = None
             content_disposition = resp.headers.get("Content-Disposition")
 
@@ -85,11 +90,9 @@ async def download_direct(url, progress_callback=None):
                 if match:
                     filename = match[0]
 
-            # Se não tiver no header, pega da URL
             if not filename:
                 filename = os.path.basename(url.split("?")[0])
 
-            # Se ainda inválido
             if not filename or "." not in filename:
                 filename = str(uuid.uuid4()) + ".mp4"
 
@@ -202,7 +205,7 @@ async def process_link(url, progress_callback=None):
     except:
         pass
 
-    # TESTAR SE É PASTA HTML
+    # 🔥 SE FOR HTML → SEMPRE TENTAR COMO PASTA
     try:
         async with aiohttp.ClientSession(headers=HEADERS) as session:
             async with session.get(url) as resp:
@@ -211,12 +214,9 @@ async def process_link(url, progress_callback=None):
 
                 if "text/html" in content_type:
 
-                    html = await resp.text()
+                    video_links = await extract_all_videos_from_folder(url)
 
-                    if any(ext in html.lower() for ext in VIDEO_EXTENSIONS):
-
-                        video_links = await extract_all_videos_from_folder(url)
-
+                    if video_links:
                         results = []
 
                         # 🔥 BAIXA UM POR VEZ EM ORDEM
@@ -229,5 +229,5 @@ async def process_link(url, progress_callback=None):
     except:
         pass
 
-    # FALLBACK
+    # FALLBACK (somente se realmente não for pasta)
     return await download_with_ytdlp(url)
