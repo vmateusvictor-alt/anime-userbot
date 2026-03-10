@@ -1,20 +1,15 @@
 import os
 import asyncio
 import uuid
-import shutil
-
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes
 )
-
 from pyrogram import Client
-
 from downloader import process_link
 from uploader import upload_video
-from converter import smart_convert
 
 
 # =====================================================
@@ -23,7 +18,6 @@ from converter import smart_convert
 
 AUTHORIZED_USERS = set()
 
-
 def load_authorized_users():
     try:
         with open("authorized_users.txt", "r") as f:
@@ -31,9 +25,7 @@ def load_authorized_users():
                 line = line.strip()
                 if line.isdigit():
                     AUTHORIZED_USERS.add(int(line))
-
         print(f"✅ {len(AUTHORIZED_USERS)} usuários autorizados carregados.")
-
     except FileNotFoundError:
         print("⚠ authorized_users.txt não encontrado.")
 
@@ -50,11 +42,9 @@ def is_authorized(update: Update):
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STRING = os.getenv("SESSION_STRING")
-
 STORAGE_CHANNEL_RAW = os.getenv("STORAGE_CHANNEL_ID")
 
 if STORAGE_CHANNEL_RAW.startswith("@"):
@@ -95,7 +85,6 @@ processing_lock = asyncio.Lock()
 async def worker(app):
 
     while True:
-
         task = await download_queue.get()
 
         async with processing_lock:
@@ -104,20 +93,17 @@ async def worker(app):
             chat_id = task["chat_id"]
             url = task["url"]
             msg = task["message"]
-            topic_id = task.get("topic_id")
+            topic_id = task.get("topic_id")  # 🔥 tópico
 
             try:
-
                 await msg.edit_text("📥 Iniciando download...")
 
                 last_percent = 0
 
                 async def progress(percent):
                     nonlocal last_percent
-
                     if percent - last_percent >= 10:
                         last_percent = percent
-
                         try:
                             await msg.edit_text(
                                 f"📥 Baixando...\n{percent:.0f}%"
@@ -125,18 +111,7 @@ async def worker(app):
                         except:
                             pass
 
-                # ===============================
-                # DOWNLOAD
-                # ===============================
-
                 result = await process_link(url, progress)
-
-                # ===============================
-                # CONVERSÃO MKV → MP4
-                # ===============================
-
-                if not isinstance(result, list):
-                    result = await smart_convert(result)
 
                 # ===============================
                 # SE FOR PASTA
@@ -159,12 +134,11 @@ async def worker(app):
                             chat_id=chat_id,
                             from_chat_id=STORAGE_CHANNEL_ID,
                             message_id=message_id,
-                            message_thread_id=topic_id
+                            message_thread_id=topic_id  # 🔥 envia no tópico correto
                         )
 
-                    # limpa downloads
-                    shutil.rmtree("downloads", ignore_errors=True)
-                    os.makedirs("downloads", exist_ok=True)
+                        if os.path.exists(filepath):
+                            os.remove(filepath)
 
                     await msg.edit_text("✅ Pasta concluída!")
 
@@ -187,24 +161,22 @@ async def worker(app):
                         chat_id=chat_id,
                         from_chat_id=STORAGE_CHANNEL_ID,
                         message_id=message_id,
-                        message_thread_id=topic_id
+                        message_thread_id=topic_id  # 🔥 envia no tópico correto
                     )
 
-                    # limpa downloads
-                    shutil.rmtree("downloads", ignore_errors=True)
-                    os.makedirs("downloads", exist_ok=True)
+                    if os.path.exists(result):
+                        os.remove(result)
 
                     await msg.edit_text("✅ Concluído!")
 
             except Exception as e:
-
                 await msg.edit_text(f"❌ Erro:\n{e}")
 
         download_queue.task_done()
 
 
 # =====================================================
-# COMANDO /an
+# COMANDO /an (COM SUPORTE A TÓPICOS)
 # =====================================================
 
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,11 +195,11 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = context.args[0]
 
-    topic_id = update.message.message_thread_id
+    topic_id = update.message.message_thread_id  # 🔥 pega o tópico
 
     msg = await update.message.reply_text(
         "📥 Adicionado à fila...",
-        message_thread_id=topic_id
+        message_thread_id=topic_id  # 🔥 responde no mesmo tópico
     )
 
     task_id = str(uuid.uuid4())[:8]
@@ -237,7 +209,7 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "chat_id": update.effective_chat.id,
         "url": url,
         "message": msg,
-        "topic_id": topic_id
+        "topic_id": topic_id  # 🔥 salva tópico
     }
 
     await download_queue.put(task)
@@ -262,7 +234,6 @@ async def start_services(app):
     await userbot.start()
 
     print("⚙ Worker iniciado.")
-
     asyncio.create_task(worker(app))
 
 
@@ -282,7 +253,6 @@ def main():
     app.add_handler(CommandHandler("an", anime_handler))
 
     print("🚀 Bot iniciado...")
-
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False
