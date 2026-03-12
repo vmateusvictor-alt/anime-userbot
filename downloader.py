@@ -32,49 +32,57 @@ def natural_sort_key(s):
 
 async def extract_animefire_video(url):
 
-    match = re.search(r"/animes/([^/]+)/(\d+)", url)
+    # remove parâmetros tipo ?123456
+    url = url.split("?")[0]
 
-    if not match:
-        raise Exception("Link AnimeFire inválido")
+    # se for link /animes/ converte para /download/
+    if "/animes/" in url:
 
-    anime = match.group(1)
-    episode = match.group(2)
+        match = re.search(r"/animes/([^/]+)/(\d+)", url)
 
-    download_page = f"https://animefire.plus/download/{anime}/{episode}"
+        if not match:
+            raise Exception("Link AnimeFire inválido")
 
+        anime = match.group(1)
+        episode = match.group(2)
+
+        url = f"https://animefire.io/download/{anime}/{episode}"
+
+    # agora acessa a página de download real
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        async with session.get(download_page) as resp:
+
+        async with session.get(url) as resp:
 
             if resp.status != 200:
-                raise Exception("Não foi possível acessar página de download")
+                raise Exception("Página de download do AnimeFire não respondeu")
 
             html = await resp.text()
 
     soup = BeautifulSoup(html, "html.parser")
 
-    qualities = {}
+    links = {}
 
     for a in soup.find_all("a", href=True):
 
-        text = a.text.strip().lower()
+        text = a.text.lower()
 
         if "full" in text:
-            qualities["full"] = a["href"]
+            links["full"] = a["href"]
 
         elif "hd" in text:
-            qualities["hd"] = a["href"]
+            links["hd"] = a["href"]
 
         elif "sd" in text:
-            qualities["sd"] = a["href"]
+            links["sd"] = a["href"]
 
-    if not qualities:
-        raise Exception("Nenhum vídeo encontrado no AnimeFire")
+    if not links:
+        raise Exception("Não foi possível extrair vídeo do AnimeFire")
 
     for q in ["full", "hd", "sd"]:
-        if q in qualities:
-            return qualities[q]
+        if q in links:
+            return links[q]
 
-    return list(qualities.values())[0]
+    return list(links.values())[0]
 
 # =====================================================
 # EXTRAIR VÍDEOS DE PASTA HTML
