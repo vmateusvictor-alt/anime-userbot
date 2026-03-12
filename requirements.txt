@@ -4,3 +4,4 @@ tgcrypto
 aiohttp
 aiofiles
 yt-dlp
+beautifulsoup4
