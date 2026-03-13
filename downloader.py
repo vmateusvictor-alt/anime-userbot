@@ -7,22 +7,25 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
 DOWNLOAD_DIR = "downloads"
-CHUNK_SIZE = 2 * 1024 * 1024  # 2MB (baixo uso de RAM)
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".webm", ".m3u8")
+CHUNK_SIZE = 2 * 1024 * 1024
+
+VIDEO_EXT = (".mp4", ".mkv", ".webm", ".m3u8")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Connection": "keep-alive"
 }
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Apenas 1 download por vez (Railway safe)
 DOWNLOAD_LOCK = asyncio.Semaphore(1)
 
 
-# =====================================================
-# ORDENAÇÃO NATURAL (ep1, ep2, ep10 correto)
-# =====================================================
+# ===============================================
+# ORDENAÇÃO NATURAL
+# ===============================================
+
 def natural_sort_key(s):
     return [
         int(text) if text.isdigit() else text.lower()
@@ -30,26 +33,51 @@ def natural_sort_key(s):
     ]
 
 
-# =====================================================
+# ===============================================
 # CONVERTER LINK GOOGLE DRIVE
-# =====================================================
-def convert_drive_link(url: str) -> str:
-    """
-    Converte:
-    https://drive.google.com/file/d/ID/view
-    para:
-    https://drive.google.com/uc?export=download&id=ID
-    """
+# ===============================================
+
+def convert_drive_link(url):
+
     match = re.search(r"/file/d/([^/]+)", url)
+
     if match:
         file_id = match.group(1)
         return f"https://drive.google.com/uc?export=download&id={file_id}"
+
     return url
 
 
-# =====================================================
-# DOWNLOAD DIRETO (STREAM POR CHUNKS)
-# =====================================================
+# ===============================================
+# PEGAR NOME DO ARQUIVO
+# ===============================================
+
+def get_filename(resp):
+
+    cd = resp.headers.get("Content-Disposition")
+
+    if cd:
+
+        match = re.findall('filename="?([^"]+)"?', cd)
+
+        if match:
+            return match[0]
+
+    parsed = urlparse(str(resp.url))
+    name = os.path.basename(parsed.path)
+
+    name = name.split("?")[0]
+
+    if not name or "." not in name:
+        name = str(uuid.uuid4()) + ".mp4"
+
+    return name
+
+
+# ===============================================
+# DOWNLOAD DIRETO
+# ===============================================
+
 async def download_direct(url, progress_callback=None):
 
     async with DOWNLOAD_LOCK:
@@ -58,10 +86,7 @@ async def download_direct(url, progress_callback=None):
 
         async with aiohttp.ClientSession(
             timeout=timeout,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Referer": url
-            }
+            headers={**HEADERS, "Referer": url}
         ) as session:
 
             async with session.get(url, allow_redirects=True) as resp:
@@ -69,15 +94,17 @@ async def download_direct(url, progress_callback=None):
                 if resp.status != 200:
                     raise Exception(f"Erro HTTP {resp.status}")
 
-                parsed = urlparse(str(resp.url))
-                filename = os.path.basename(parsed.path)
-
-                if not filename or "." not in filename:
-                    filename = str(uuid.uuid4()) + ".mp4"
+                filename = get_filename(resp)
 
                 filepath = os.path.join(DOWNLOAD_DIR, filename)
 
-                total = int(resp.headers.get("content-length", 0) or 0)
+                total = resp.headers.get("content-length")
+
+                if total:
+                    total = int(total)
+                else:
+                    total = 0
+
                 downloaded = 0
                 last_percent = 0
 
@@ -93,15 +120,18 @@ async def download_direct(url, progress_callback=None):
                             percent = (downloaded / total) * 100
 
                             if percent - last_percent >= 5:
+
                                 last_percent = percent
+
                                 await progress_callback(round(percent, 1))
 
         return filepath
 
 
-# =====================================================
-# DOWNLOAD M3U8 (USANDO FFMPEG)
-# =====================================================
+# ===============================================
+# DOWNLOAD M3U8
+# ===============================================
+
 async def download_m3u8(url):
 
     async with DOWNLOAD_LOCK:
@@ -127,14 +157,15 @@ async def download_m3u8(url):
         await process.wait()
 
         if process.returncode != 0:
-            raise Exception("Erro ao baixar stream m3u8")
+            raise Exception("Erro ao baixar stream")
 
         return filepath
 
 
-# =====================================================
-# EXTRAIR VÍDEOS DE PASTA HTML
-# =====================================================
+# ===============================================
+# EXTRAIR VÍDEOS DE PASTA
+# ===============================================
+
 async def extract_videos_from_folder(url):
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -142,14 +173,14 @@ async def extract_videos_from_folder(url):
         async with session.get(url) as resp:
 
             if resp.status != 200:
-                raise Exception("Não foi possível acessar a pasta")
+                raise Exception("Não foi possível acessar pasta")
 
             html = await resp.text()
 
     soup = BeautifulSoup(html, "html.parser")
 
-    video_links = []
-    folder_links = []
+    videos = []
+    folders = []
 
     for a in soup.find_all("a", href=True):
 
@@ -160,68 +191,67 @@ async def extract_videos_from_folder(url):
 
         lower = href.lower()
 
-        if any(ext in lower for ext in VIDEO_EXTENSIONS):
-            video_links.append(urljoin(url, href))
+        if any(ext in lower for ext in VIDEO_EXT):
+
+            videos.append(urljoin(url, href))
 
         elif href.endswith("/"):
-            folder_links.append(urljoin(url, href))
 
-    if video_links:
-        video_links.sort(key=natural_sort_key)
-        return video_links
+            folders.append(urljoin(url, href))
 
-    # Se não achou vídeos, tenta subpastas
-    for folder in folder_links:
+    if videos:
+
+        videos.sort(key=natural_sort_key)
+
+        return videos
+
+    for folder in folders:
 
         try:
-            sub = await extract_videos_from_folder(folder)
 
-            if sub:
-                return sub
+            result = await extract_videos_from_folder(folder)
+
+            if result:
+                return result
 
         except:
             pass
 
-    raise Exception("Nenhum vídeo encontrado na pasta")
+    raise Exception("Nenhum vídeo encontrado")
 
 
-# =====================================================
+# ===============================================
 # PROCESSADOR PRINCIPAL
-# =====================================================
+# ===============================================
+
 async def process_link(url, progress_callback=None):
 
     url_lower = url.lower()
 
-    # ------------------------------
     # GOOGLE DRIVE
-    # ------------------------------
     if "drive.google.com" in url_lower:
 
-        direct = convert_drive_link(url)
+        url = convert_drive_link(url)
 
-        return await download_direct(direct, progress_callback)
-
-    # ------------------------------
-    # download.aspx (workers / rclone)
-    # ------------------------------
-    if "download.aspx" in url_lower:
         return await download_direct(url, progress_callback)
 
-    # ------------------------------
-    # STREAM M3U8
-    # ------------------------------
+    # WORKERS DOWNLOAD
+    if "download.aspx" in url_lower:
+
+        return await download_direct(url, progress_callback)
+
+    # STREAM
     if url_lower.endswith(".m3u8"):
+
         return await download_m3u8(url)
 
-    # ------------------------------
-    # VÍDEO DIRETO
-    # ------------------------------
+    # VIDEO DIRETO
     if url_lower.endswith((".mp4", ".mkv", ".webm")):
+
         return await download_direct(url, progress_callback)
 
-    # ------------------------------
-    # TENTAR DETECTAR PASTA HTML
-    # ------------------------------
+    # TENTAR DETECTAR PASTA
+
     try:
 
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -234,7 +264,7 @@ async def process_link(url, progress_callback=None):
 
                     html = await resp.text()
 
-                    if any(ext in html.lower() for ext in VIDEO_EXTENSIONS):
+                    if any(ext in html.lower() for ext in VIDEO_EXT):
 
                         links = await extract_videos_from_folder(url)
 
@@ -251,7 +281,4 @@ async def process_link(url, progress_callback=None):
     except:
         pass
 
-    # ------------------------------
-    # LINK NÃO SUPORTADO
-    # ------------------------------
     raise Exception("Link não suportado ou expirado")
