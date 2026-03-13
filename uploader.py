@@ -7,6 +7,9 @@ from telegram.error import RetryAfter, TimedOut, NetworkError
 # PEGAR METADATA REAL
 # =====================================================
 async def get_video_metadata(filepath):
+    """
+    Retorna: duration(int), width(int), height(int)
+    """
     cmd = [
         "ffprobe",
         "-v", "error",
@@ -15,24 +18,37 @@ async def get_video_metadata(filepath):
         "-of", "json",
         filepath
     ]
+
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
     stdout, _ = await process.communicate()
-    data = json.loads(stdout.decode() or "{}")
-    stream = data.get("streams", [{}])[0]
 
+    try:
+        data = json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        data = {}
+
+    width = 0
+    height = 0
+    duration = 0
+
+    stream = data.get("streams", [{}])[0]
     width = int(stream.get("width", 0) or 0)
     height = int(stream.get("height", 0) or 0)
     duration = int(float(stream.get("duration", 0) or 0))
+
     return duration, width, height
 
 # =====================================================
 # GERAR THUMB
 # =====================================================
 async def generate_thumbnail(filepath):
+    """
+    Gera thumbnail JPG do vídeo (frame aos 5s, escala 320px de largura)
+    """
     thumb_path = filepath + ".jpg"
     cmd = [
         "ffmpeg",
@@ -44,46 +60,48 @@ async def generate_thumbnail(filepath):
         thumb_path,
         "-y"
     ]
+
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL
     )
     await process.communicate()
+
     return thumb_path if os.path.exists(thumb_path) else None
 
 # =====================================================
-# FUNÇÃO DE PROGRESSO
-# =====================================================
-async def progress_callback(current, total, message):
-    percent = int(current / total * 100)
-    if percent % 5 == 0 or current == total:
-        try:
-            await message.edit_text(f"📤 Upload: {percent}% ({current/1024/1024:.2f}/{total/1024/1024:.2f} MB)")
-        except Exception:
-            pass
-
-# =====================================================
-# UPLOAD PARA USERBOT TELEGRAM
+# UPLOAD COMPLETO COM INFO
 # =====================================================
 async def upload_video(userbot, filepath, message, storage_chat_id):
+    """
+    Upload de vídeo otimizado para Telegram userbot:
+    - metadata real
+    - thumbnail
+    - retries automáticos
+    """
     await message.edit_text("📤 Preparando vídeo...")
 
-    # Metadata + Thumbnail em paralelo
+    # Executar metadata e thumbnail em paralelo
     try:
-        metadata_task = get_video_metadata(filepath)
-        thumb_task = generate_thumbnail(filepath)
-        duration, width, height = await metadata_task
-        thumb = await thumb_task
+        duration, width, height, thumb = await asyncio.gather(
+            get_video_metadata(filepath),
+            generate_thumbnail(filepath)
+        )
     except Exception:
         duration, width, height, thumb = 0, 0, 0, None
 
+    # Ajustar retorno do gather (porque get_video_metadata retorna tuple)
+    if isinstance(duration, tuple):
+        duration, width, height = duration
+
+    # Nome do arquivo
     file_name = os.path.basename(filepath)
     if file_name.endswith(".mp4.mp4"):
         file_name = file_name.replace(".mp4.mp4", ".mp4")
     caption_name = file_name.rsplit(".", 1)[0]
 
-    # Upload com retries e progresso
+    # Tentativa de upload com retries
     for attempt in range(3):
         try:
             sent = await userbot.send_video(
@@ -95,16 +113,15 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
                 thumb=thumb,
                 file_name=file_name,
                 caption=f"🎬 {caption_name}",
-                supports_streaming=True,
-                progress=lambda current, total: asyncio.create_task(progress_callback(current, total, message))
+                supports_streaming=True
             )
             break
-        except (RetryAfter, TimedOut, NetworkError) as e:
-            wait = getattr(e, 'retry_after', 5)
-            await asyncio.sleep(wait)
+        except (RetryAfter, TimedOut, NetworkError):
+            await asyncio.sleep(5)
     else:
         raise Exception("❌ Upload falhou após 3 tentativas!")
 
+    # Limpar thumbnail
     if thumb and os.path.exists(thumb):
         try:
             os.remove(thumb)
