@@ -79,46 +79,50 @@ async def download_direct(url, progress_callback=None):
 
         timeout = aiohttp.ClientTimeout(total=None)
 
-        async with aiohttp.ClientSession(timeout=timeout, headers=HEADERS) as session:
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": url
+            }
+        ) as session:
 
             async with session.get(url, allow_redirects=True) as resp:
 
                 if resp.status != 200:
                     raise Exception(f"Erro HTTP {resp.status}")
 
+                parsed = urlparse(str(resp.url))
                 content_type = resp.headers.get("content-type", "")
 
-                if "text/html" in content_type:
+                # Permite download.aspx mesmo se vier como HTML
+                if "text/html" in content_type and "download.aspx" not in parsed.path:
                     raise Exception("Servidor retornou HTML inesperado.")
 
+                # nome do arquivo
                 filename = None
+                cd = resp.headers.get("Content-Disposition")
 
-                content_disposition = resp.headers.get("Content-Disposition")
-
-                if content_disposition:
-
-                    match = re.findall('filename="?([^"]+)"?', content_disposition)
-
+                if cd:
+                    match = re.findall('filename="?([^"]+)"?', cd)
                     if match:
                         filename = match[0]
 
                 if not filename:
-
-                    parsed = urlparse(str(resp.url))
                     filename = os.path.basename(parsed.path)
 
                 if not filename or "." not in filename:
                     filename = str(uuid.uuid4()) + ".mp4"
 
-                output_path = os.path.join(DOWNLOAD_DIR, filename)
+                filepath = os.path.join(DOWNLOAD_DIR, filename)
 
                 total = int(resp.headers.get("content-length", 0) or 0)
                 downloaded = 0
                 last_percent = 0
 
-                with open(output_path, "wb") as f:
+                with open(filepath, "wb") as f:
 
-                    async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
+                    async for chunk in resp.content.iter_chunked(2 * 1024 * 1024):
 
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -128,12 +132,10 @@ async def download_direct(url, progress_callback=None):
                             percent = (downloaded / total) * 100
 
                             if percent - last_percent >= 5:
-
                                 last_percent = percent
                                 await progress_callback(round(percent, 1))
 
-        return output_path
-
+        return filepath
 
 # =====================================================
 # DOWNLOAD M3U8
