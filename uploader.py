@@ -7,9 +7,6 @@ from telegram.error import RetryAfter, TimedOut, NetworkError
 # PEGAR METADATA REAL
 # =====================================================
 async def get_video_metadata(filepath):
-    """
-    Pega duração, largura e altura do vídeo usando ffprobe.
-    """
     cmd = [
         "ffprobe",
         "-v", "error",
@@ -30,16 +27,12 @@ async def get_video_metadata(filepath):
     width = int(stream.get("width", 0) or 0)
     height = int(stream.get("height", 0) or 0)
     duration = int(float(stream.get("duration", 0) or 0))
-
     return duration, width, height
 
 # =====================================================
 # GERAR THUMB
 # =====================================================
 async def generate_thumbnail(filepath):
-    """
-    Gera thumbnail JPG do vídeo (frame aos 5s, escala 320px largura)
-    """
     thumb_path = filepath + ".jpg"
     cmd = [
         "ffmpeg",
@@ -60,42 +53,37 @@ async def generate_thumbnail(filepath):
     return thumb_path if os.path.exists(thumb_path) else None
 
 # =====================================================
-# UPLOAD COMPLETO COM INFO EM PARALLO
+# FUNÇÃO DE PROGRESSO
+# =====================================================
+async def progress_callback(current, total, message):
+    percent = int(current / total * 100)
+    if percent % 5 == 0 or current == total:
+        try:
+            await message.edit_text(f"📤 Upload: {percent}% ({current/1024/1024:.2f}/{total/1024/1024:.2f} MB)")
+        except Exception:
+            pass
+
+# =====================================================
+# UPLOAD PARA USERBOT TELEGRAM
 # =====================================================
 async def upload_video(userbot, filepath, message, storage_chat_id):
-    """
-    Upload otimizado para Telegram:
-    - metadata + thumbnail em paralelo
-    - retries automáticos
-    - chunk_size ajustável para Railway
-    """
     await message.edit_text("📤 Preparando vídeo...")
 
-    # 🔥 Executar metadata e thumbnail em paralelo
-    duration, width, height, thumb = 0, 0, 0, None
+    # Metadata + Thumbnail em paralelo
     try:
-        duration, width, height, thumb = await asyncio.gather(
-            get_video_metadata(filepath),
-            generate_thumbnail(filepath),
-        )
+        metadata_task = get_video_metadata(filepath)
+        thumb_task = generate_thumbnail(filepath)
+        duration, width, height = await metadata_task
+        thumb = await thumb_task
     except Exception:
-        # fallback em caso de erro
-        duration, width, height = 0, 0, 0
-        thumb = None
+        duration, width, height, thumb = 0, 0, 0, None
 
-    # Ajuste de retorno do gather
-    if isinstance(duration, tuple):
-        duration, width, height = duration
-    if isinstance(width, tuple):  # caso gather misture retornos
-        width, height = width
-
-    # 🔥 Nome do arquivo
     file_name = os.path.basename(filepath)
     if file_name.endswith(".mp4.mp4"):
         file_name = file_name.replace(".mp4.mp4", ".mp4")
     caption_name = file_name.rsplit(".", 1)[0]
 
-    # 🔥 Tentativa de upload com retries
+    # Upload com retries e progresso
     for attempt in range(3):
         try:
             sent = await userbot.send_video(
@@ -108,7 +96,7 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
                 file_name=file_name,
                 caption=f"🎬 {caption_name}",
                 supports_streaming=True,
-                chunk_size=128 * 1024  # 128KB, ajuste conforme memória Railway
+                progress=lambda current, total: asyncio.create_task(progress_callback(current, total, message))
             )
             break
         except (RetryAfter, TimedOut, NetworkError) as e:
@@ -117,11 +105,11 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
     else:
         raise Exception("❌ Upload falhou após 3 tentativas!")
 
-    # 🔥 Limpeza do thumbnail
     if thumb and os.path.exists(thumb):
         try:
             os.remove(thumb)
         except Exception:
             pass
 
+    await message.edit_text(f"✅ Upload concluído: {caption_name}")
     return sent.id
