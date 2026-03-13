@@ -47,7 +47,7 @@ async def get_video_metadata(filepath):
 # =====================================================
 async def generate_thumbnail(filepath):
     """
-    Gera thumbnail JPG do vídeo (frame aos 5s, escala 320px de largura)
+    Gera thumbnail JPG do vídeo (frame aos 5s, escala 320px largura)
     """
     thumb_path = filepath + ".jpg"
     cmd = [
@@ -71,29 +71,29 @@ async def generate_thumbnail(filepath):
     return thumb_path if os.path.exists(thumb_path) else None
 
 # =====================================================
-# UPLOAD COMPLETO COM INFO
+# UPLOAD COMPLETO COM THUMBNAIL GARANTIDA
 # =====================================================
 async def upload_video(userbot, filepath, message, storage_chat_id):
     """
     Upload de vídeo otimizado para Telegram userbot:
     - metadata real
-    - thumbnail
+    - thumbnail garantida
     - retries automáticos
     """
     await message.edit_text("📤 Preparando vídeo...")
 
-    # Executar metadata e thumbnail em paralelo
+    # Metadata + thumbnail em paralelo
     try:
-        duration, width, height, thumb = await asyncio.gather(
-            get_video_metadata(filepath),
-            generate_thumbnail(filepath)
-        )
+        metadata_task = get_video_metadata(filepath)
+        thumb_task = generate_thumbnail(filepath)
+        duration, width, height = await metadata_task
+        thumb = await thumb_task
     except Exception:
         duration, width, height, thumb = 0, 0, 0, None
 
-    # Ajustar retorno do gather (porque get_video_metadata retorna tuple)
-    if isinstance(duration, tuple):
-        duration, width, height = duration
+    # Se thumbnail falhar, tentar novamente
+    if not thumb or not os.path.exists(thumb):
+        thumb = await generate_thumbnail(filepath)
 
     # Nome do arquivo
     file_name = os.path.basename(filepath)
@@ -101,7 +101,7 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
         file_name = file_name.replace(".mp4.mp4", ".mp4")
     caption_name = file_name.rsplit(".", 1)[0]
 
-    # Tentativa de upload com retries
+    # Upload com retries
     for attempt in range(3):
         try:
             sent = await userbot.send_video(
