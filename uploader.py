@@ -9,6 +9,7 @@ from telegram.error import RetryAfter, TimedOut, NetworkError
 async def get_video_metadata(filepath):
     """
     Retorna: duration(int), width(int), height(int)
+    Garante que duration seja int >=1
     """
     cmd = [
         "ffprobe",
@@ -38,7 +39,15 @@ async def get_video_metadata(filepath):
     stream = data.get("streams", [{}])[0]
     width = int(stream.get("width", 0) or 0)
     height = int(stream.get("height", 0) or 0)
-    duration = int(float(stream.get("duration", 0) or 0))
+
+    raw_duration = stream.get("duration")
+    if raw_duration and raw_duration != "N/A":
+        try:
+            duration = max(1, int(float(raw_duration)))
+        except:
+            duration = 1  # fallback mínimo de 1s
+    else:
+        duration = 1
 
     return duration, width, height
 
@@ -46,9 +55,6 @@ async def get_video_metadata(filepath):
 # GERAR THUMB
 # =====================================================
 async def generate_thumbnail(filepath):
-    """
-    Gera thumbnail JPG do vídeo (frame aos 5s, escala 320px largura)
-    """
     thumb_path = filepath + ".jpg"
     cmd = [
         "ffmpeg",
@@ -71,15 +77,9 @@ async def generate_thumbnail(filepath):
     return thumb_path if os.path.exists(thumb_path) else None
 
 # =====================================================
-# UPLOAD COMPLETO COM THUMBNAIL GARANTIDA
+# UPLOAD COMPLETO COM THUMBNAIL E TEMPO CORRETO
 # =====================================================
 async def upload_video(userbot, filepath, message, storage_chat_id):
-    """
-    Upload de vídeo otimizado para Telegram userbot:
-    - metadata real
-    - thumbnail garantida
-    - retries automáticos
-    """
     await message.edit_text("📤 Preparando vídeo...")
 
     # Metadata + thumbnail em paralelo
@@ -89,9 +89,9 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
         duration, width, height = await metadata_task
         thumb = await thumb_task
     except Exception:
-        duration, width, height, thumb = 0, 0, 0, None
+        duration, width, height, thumb = 1, 0, 0, None
 
-    # Se thumbnail falhar, tentar novamente
+    # Se thumbnail falhar, gerar novamente
     if not thumb or not os.path.exists(thumb):
         thumb = await generate_thumbnail(filepath)
 
@@ -107,7 +107,7 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
             sent = await userbot.send_video(
                 chat_id=storage_chat_id,
                 video=filepath,
-                duration=duration,
+                duration=duration,  # ⬅️ garante que seja int válido
                 width=width,
                 height=height,
                 thumb=thumb,
@@ -125,7 +125,7 @@ async def upload_video(userbot, filepath, message, storage_chat_id):
     if thumb and os.path.exists(thumb):
         try:
             os.remove(thumb)
-        except Exception:
+        except:
             pass
 
     await message.edit_text(f"✅ Upload concluído: {caption_name}")
