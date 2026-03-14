@@ -1,22 +1,21 @@
 import os
 import asyncio
 import json
-from telegram.error import RetryAfter, TimedOut, NetworkError
+import time
+
 
 # =====================================================
 # PEGAR METADATA REAL
 # =====================================================
+
 async def get_video_metadata(filepath):
-    """
-    Retorna: duration(int), width(int), height(int)
-    Garante que duration seja int >=1
-    """
+
     cmd = [
         "ffprobe",
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height,duration",
-        "-of", "json",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
         filepath
     ]
 
@@ -25,108 +24,92 @@ async def get_video_metadata(filepath):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
+
     stdout, _ = await process.communicate()
+    data = json.loads(stdout.decode())
 
-    try:
-        data = json.loads(stdout.decode())
-    except json.JSONDecodeError:
-        data = {}
-
+    duration = 0
     width = 0
     height = 0
-    duration = 0
 
-    stream = data.get("streams", [{}])[0]
-    width = int(stream.get("width", 0) or 0)
-    height = int(stream.get("height", 0) or 0)
+    try:
+        raw_duration = data.get("format", {}).get("duration", 0)
+        if raw_duration and raw_duration != "N/A":
+            duration = int(float(raw_duration))
+    except:
+        duration = 0
 
-    raw_duration = stream.get("duration")
-    if raw_duration and raw_duration != "N/A":
-        try:
-            duration = max(1, int(float(raw_duration)))
-        except:
-            duration = 1  # fallback mínimo de 1s
-    else:
-        duration = 1
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            width = stream.get("width", 0) or 0
+            height = stream.get("height", 0) or 0
+            break
 
     return duration, width, height
+
 
 # =====================================================
 # GERAR THUMB
 # =====================================================
-async def generate_thumbnail(filepath):
-    thumb_path = filepath + ".jpg"
-    cmd = [
-        "ffmpeg",
-        "-ss", "00:00:05",
-        "-i", filepath,
-        "-vframes", "1",
-        "-vf", "scale=320:-1",
-        "-q:v", "3",
-        thumb_path,
-        "-y"
-    ]
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
+async def generate_thumbnail(filepath):
+
+    thumb_path = filepath + ".jpg"
+
+    cmd = (
+        f'ffmpeg -ss 00:00:05 -i "{filepath}" '
+        f'-vframes 1 -vf "scale=320:-1" -q:v 3 "{thumb_path}" -y'
+    )
+
+    process = await asyncio.create_subprocess_shell(
+        cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL
     )
+
     await process.communicate()
 
-    return thumb_path if os.path.exists(thumb_path) else None
+    if os.path.exists(thumb_path):
+        return thumb_path
+
+    return None
+
 
 # =====================================================
-# UPLOAD COMPLETO COM THUMBNAIL E TEMPO CORRETO
+# UPLOAD COMPLETO COM INFO
 # =====================================================
+
+import os
+
 async def upload_video(userbot, filepath, message, storage_chat_id):
+
     await message.edit_text("📤 Preparando vídeo...")
 
-    # Metadata + thumbnail em paralelo
-    try:
-        metadata_task = get_video_metadata(filepath)
-        thumb_task = generate_thumbnail(filepath)
-        duration, width, height = await metadata_task
-        thumb = await thumb_task
-    except Exception:
-        duration, width, height, thumb = 1, 0, 0, None
+    duration, width, height = await get_video_metadata(filepath)
+    thumb = await generate_thumbnail(filepath)
 
-    # Se thumbnail falhar, gerar novamente
-    if not thumb or not os.path.exists(thumb):
-        thumb = await generate_thumbnail(filepath)
-
-    # Nome do arquivo
     file_name = os.path.basename(filepath)
+
+    # 🔥 Remove duplicação .mp4.mp4
     if file_name.endswith(".mp4.mp4"):
         file_name = file_name.replace(".mp4.mp4", ".mp4")
+
+    # 🔥 Remove extensão da legenda (opcional)
     caption_name = file_name.rsplit(".", 1)[0]
 
-    # Upload com retries
-    for attempt in range(3):
-        try:
-            sent = await userbot.send_video(
-                chat_id=storage_chat_id,
-                video=filepath,
-                duration=duration,  # ⬅️ garante que seja int válido
-                width=width,
-                height=height,
-                thumb=thumb,
-                file_name=file_name,
-                caption=f"🎬 {caption_name}",
-                supports_streaming=True
-            )
-            break
-        except (RetryAfter, TimedOut, NetworkError):
-            await asyncio.sleep(5)
-    else:
-        raise Exception("❌ Upload falhou após 3 tentativas!")
+    sent = await userbot.send_video(
+        chat_id=storage_chat_id,
+        video=filepath,
+        duration=duration,
+        width=width,
+        height=height,
+        thumb=thumb,
+        file_name=file_name,
+        caption=f"🎬 {caption_name}",
+        supports_streaming=True
+    )
 
-    # Limpar thumbnail
     if thumb and os.path.exists(thumb):
-        try:
-            os.remove(thumb)
-        except:
-            pass
+        os.remove(thumb)
 
-    await message.edit_text(f"✅ Upload concluído: {caption_name}")
     return sent.id
