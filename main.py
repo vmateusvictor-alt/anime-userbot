@@ -1,13 +1,12 @@
 import os
 import asyncio
 import uuid
+
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
 from pyrogram import Client
+
 from downloader import process_link
 from uploader import upload_video
 
@@ -25,9 +24,11 @@ def load_authorized_users():
                 line = line.strip()
                 if line.isdigit():
                     AUTHORIZED_USERS.add(int(line))
-        print(f"✅ {len(AUTHORIZED_USERS)} usuários autorizados carregados.")
+
+        print(f"✅ {len(AUTHORIZED_USERS)} usuários autorizados carregados")
+
     except FileNotFoundError:
-        print("⚠ authorized_users.txt não encontrado.")
+        print("⚠ authorized_users.txt não encontrado")
 
 
 def is_authorized(update: Update):
@@ -42,9 +43,12 @@ def is_authorized(update: Update):
 # =====================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
+
 SESSION_STRING = os.getenv("SESSION_STRING")
+
 STORAGE_CHANNEL_RAW = os.getenv("STORAGE_CHANNEL_ID")
 
 if STORAGE_CHANNEL_RAW.startswith("@"):
@@ -75,84 +79,68 @@ userbot = Client(
 # =====================================================
 
 download_queue = asyncio.Queue()
-processing_lock = asyncio.Lock()
 
 
 # =====================================================
-# WORKER (1 POR VEZ + SUPORTE A TÓPICOS)
+# WORKER
 # =====================================================
 
 async def worker(app):
 
+    print("⚙ Worker iniciado")
+
     while True:
+
         task = await download_queue.get()
 
-        async with processing_lock:
+        task_id = task["id"]
+        chat_id = task["chat_id"]
+        url = task["url"]
+        msg = task["message"]
+        topic_id = task.get("topic_id")
 
-            task_id = task["id"]
-            chat_id = task["chat_id"]
-            url = task["url"]
-            msg = task["message"]
-            topic_id = task.get("topic_id")  # 🔥 tópico
+        try:
 
-            try:
-                await msg.edit_text("📥 Iniciando download...")
+            print("⬇️ Download iniciado:", url)
 
-                last_percent = 0
+            await msg.edit_text("📥 Iniciando download...")
 
-                async def progress(percent):
-                    nonlocal last_percent
-                    if percent - last_percent >= 10:
-                        last_percent = percent
-                        try:
-                            await msg.edit_text(
-                                f"📥 Baixando...\n{percent:.0f}%"
-                            )
-                        except:
-                            pass
+            last_percent = 0
 
-                result = await process_link(url, progress)
+            async def progress(percent):
 
-                # ===============================
-                # SE FOR PASTA
-                # ===============================
+                nonlocal last_percent
 
-                if isinstance(result, list):
+                if percent - last_percent >= 10:
 
-                    for filepath in result:
+                    last_percent = percent
 
-                        await msg.edit_text("📤 Enviando para o canal...")
-
-                        message_id = await upload_video(
-                            userbot=userbot,
-                            filepath=filepath,
-                            message=msg,
-                            storage_chat_id=STORAGE_CHANNEL_ID
+                    try:
+                        await msg.edit_text(
+                            f"📥 Baixando...\n{percent:.0f}%"
                         )
+                    except:
+                        pass
 
-                        await app.bot.copy_message(
-                            chat_id=chat_id,
-                            from_chat_id=STORAGE_CHANNEL_ID,
-                            message_id=message_id,
-                            message_thread_id=topic_id  # 🔥 envia no tópico correto
-                        )
 
-                        if os.path.exists(filepath):
-                            os.remove(filepath)
+            result = await process_link(url, progress)
 
-                    await msg.edit_text("✅ Pasta concluída!")
+            # ===============================
+            # PASTA
+            # ===============================
 
-                # ===============================
-                # ARQUIVO ÚNICO
-                # ===============================
+            if isinstance(result, list):
 
-                else:
+                for filepath in result:
 
-                    await msg.edit_text("📤 Enviando para o canal...")
+                    if not os.path.exists(filepath):
+                        continue
+
+                    await msg.edit_text("📤 Enviando vídeo...")
 
                     message_id = await upload_video(
                         userbot=userbot,
-                        filepath=result,
+                        filepath=filepath,
                         message=msg,
                         storage_chat_id=STORAGE_CHANNEL_ID
                     )
@@ -161,32 +149,66 @@ async def worker(app):
                         chat_id=chat_id,
                         from_chat_id=STORAGE_CHANNEL_ID,
                         message_id=message_id,
-                        message_thread_id=topic_id  # 🔥 envia no tópico correto
+                        message_thread_id=topic_id
                     )
 
-                    if os.path.exists(result):
-                        os.remove(result)
+                    os.remove(filepath)
 
-                    await msg.edit_text("✅ Concluído!")
+                await msg.edit_text("✅ Pasta concluída")
 
-            except Exception as e:
+            # ===============================
+            # ARQUIVO ÚNICO
+            # ===============================
+
+            else:
+
+                if not os.path.exists(result):
+                    raise Exception("Arquivo não foi baixado")
+
+                await msg.edit_text("📤 Enviando vídeo...")
+
+                message_id = await upload_video(
+                    userbot=userbot,
+                    filepath=result,
+                    message=msg,
+                    storage_chat_id=STORAGE_CHANNEL_ID
+                )
+
+                await app.bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=STORAGE_CHANNEL_ID,
+                    message_id=message_id,
+                    message_thread_id=topic_id
+                )
+
+                os.remove(result)
+
+                await msg.edit_text("✅ Concluído")
+
+        except Exception as e:
+
+            print("❌ ERRO:", e)
+
+            try:
                 await msg.edit_text(f"❌ Erro:\n{e}")
+            except:
+                pass
 
         download_queue.task_done()
 
 
 # =====================================================
-# COMANDO /an (COM SUPORTE A TÓPICOS)
+# COMANDO /an
 # =====================================================
 
 async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not is_authorized(update):
-        await update.message.reply_text("❌ Você não está autorizado.")
+        await update.message.reply_text("❌ Você não está autorizado")
         return
 
     if update.effective_chat.type == "private":
-        await update.message.reply_text("❌ Funciona apenas em grupos.")
+        await update.message.reply_text("❌ Use em grupos")
         return
 
     if not context.args:
@@ -195,11 +217,11 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url = context.args[0]
 
-    topic_id = update.message.message_thread_id  # 🔥 pega o tópico
+    topic_id = update.message.message_thread_id
 
     msg = await update.message.reply_text(
         "📥 Adicionado à fila...",
-        message_thread_id=topic_id  # 🔥 responde no mesmo tópico
+        message_thread_id=topic_id
     )
 
     task_id = str(uuid.uuid4())[:8]
@@ -209,7 +231,7 @@ async def anime_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "chat_id": update.effective_chat.id,
         "url": url,
         "message": msg,
-        "topic_id": topic_id  # 🔥 salva tópico
+        "topic_id": topic_id
     }
 
     await download_queue.put(task)
@@ -231,9 +253,9 @@ async def start_services(app):
     load_authorized_users()
 
     print("🔌 Iniciando userbot...")
+
     await userbot.start()
 
-    print("⚙ Worker iniciado.")
     asyncio.create_task(worker(app))
 
 
@@ -252,7 +274,8 @@ def main():
 
     app.add_handler(CommandHandler("an", anime_handler))
 
-    print("🚀 Bot iniciado...")
+    print("🚀 Bot iniciado")
+
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False
